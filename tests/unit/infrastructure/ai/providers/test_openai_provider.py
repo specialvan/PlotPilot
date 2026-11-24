@@ -40,6 +40,24 @@ class TestOpenAIProviderLegacy:
         assert provider.async_client is not None
         assert provider._use_legacy is True
 
+    @pytest.mark.anyio
+    @pytest.mark.parametrize(
+        "configured_url, expected_url",
+        [
+            (None, "https://api.openai.com/v1/"),
+            ("https://profile.example/v1", "https://profile.example/v1/"),
+        ],
+    )
+    async def test_profile_endpoint_does_not_inherit_sdk_environment(
+        self, monkeypatch, configured_url, expected_url
+    ):
+        monkeypatch.setenv("OPENAI_BASE_URL", "https://unrelated.example/v1")
+        provider = OpenAIProvider(Settings(api_key="profile-key", base_url=configured_url))
+        try:
+            assert str(provider.async_client.base_url) == expected_url
+        finally:
+            await provider.aclose()
+
     def test_http_timeout_uses_settings(self):
         provider = OpenAIProvider(
             Settings(

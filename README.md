@@ -247,6 +247,7 @@ cd frontend && npm install && npm run dev
 | `LLM_PROVIDER` | 可选；指定默认 LLM 提供方 |
 | `ANTHROPIC_API_KEY` / `ARK_API_KEY` / `OPENAI_API_KEY` / `GEMINI_API_KEY` | 至少配置一个 LLM 凭证 |
 | `ARK_BASE_URL` / `ARK_MODEL`、`ANTHROPIC_BASE_URL` / `ANTHROPIC_MODEL`、`OPENAI_BASE_URL` / `OPENAI_MODEL`、`GEMINI_BASE_URL` / `GEMINI_MODEL` | 对应提供方的接口地址与模型名 |
+| `gpt_API_KEY` / `gpt_BASE_URL` / `gpt_MODEL` | OpenAI 兼容网关的整组别名；`OPENAI_API_KEY` 非空时优先使用整组 `OPENAI_*`，两组不会混用 |
 | `EMBEDDING_SERVICE` | `openai`（`.env.example` 默认）或 `local`（需额外安装模型，见 `requirements-local.txt`） |
 | `EMBEDDING_API_KEY` / `EMBEDDING_BASE_URL` / `EMBEDDING_MODEL` | 云端嵌入服务配置；`EMBEDDING_API_KEY` 为空时可回退读取 `OPENAI_API_KEY` |
 | `EMBEDDING_MODEL_PATH` / `EMBEDDING_USE_GPU` | 本地嵌入模型路径与 GPU 开关 |
@@ -258,6 +259,8 @@ cd frontend && npm install && npm run dev
 | `PLOTPILOT_CLOUD_BASE_URL` / `PLOTPILOT_CLOUD_CLIENT_NAME` / `PLOTPILOT_CLOUD_TIMEOUT` | 云广场连接器：端点（默认 `https://plotpilot.xyz`）、客户端标识（默认 `plotpilot-kernel`）、请求超时秒数 |
 
 完整说明见 [`.env.example`](.env.example)。
+
+模型环境变量在空数据库首次启动时初始化档案；已有配置请在「LLM 控制」中保存并激活目标档案。多种提供方同时存在时，可用 `LLM_PROVIDER=openai` 选择以 `gpt_*` 或 `OPENAI_*` 初始化。
 
 ---
 

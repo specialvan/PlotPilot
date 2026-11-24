@@ -12,6 +12,9 @@ LLM_ENV_NAMES = (
     "OPENAI_API_KEY",
     "OPENAI_BASE_URL",
     "OPENAI_MODEL",
+    "gpt_API_KEY",
+    "gpt_BASE_URL",
+    "gpt_MODEL",
     "GEMINI_API_KEY",
     "GEMINI_BASE_URL",
     "GEMINI_MODEL",
@@ -77,6 +80,27 @@ def test_initial_config_keeps_ark_default_base_url(monkeypatch):
     assert active.name == "豆包 / Ark"
     assert active.base_url == ARK_DEFAULT_BASE_URL
     assert active.model == "ark-model"
+
+
+def test_initial_config_uses_gpt_gateway_alias_with_explicit_provider(monkeypatch):
+    _clear_llm_env(monkeypatch)
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "other-provider-key")
+    monkeypatch.setenv("gpt_API_KEY", "gateway-key")
+    monkeypatch.setenv("gpt_BASE_URL", "https://gateway.example/v1")
+    monkeypatch.setenv("gpt_MODEL", "gateway-model")
+    service = LLMControlService()
+
+    config = service._build_initial_config()
+    active = service.resolve_active_profile(config)
+
+    assert active is not None
+    assert config.active_profile_id == "openai-compatible-default"
+    assert active.protocol == "openai"
+    assert active.preset_key == "custom-openai-compatible"
+    assert active.api_key == "gateway-key"
+    assert active.base_url == "https://gateway.example/v1"
+    assert active.model == "gateway-model"
 
 
 def test_profile_lifts_small_max_tokens_to_global_floor():

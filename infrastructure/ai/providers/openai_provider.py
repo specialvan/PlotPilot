@@ -40,13 +40,13 @@ class OpenAIProvider(BaseProvider):
 
         client_kwargs = {
             "api_key": settings.api_key,
+            # Settings is already resolved from a single profile. Omitting this
+            # lets the SDK silently inherit an unrelated OPENAI_BASE_URL.
+            "base_url": settings.base_url or "https://api.openai.com/v1",
             "timeout": settings.timeout_seconds,
             "default_headers": settings.extra_headers or None,
             "default_query": settings.extra_query or None,
         }
-        if settings.base_url:
-            client_kwargs["base_url"] = settings.base_url
-
         self._http_client = httpx.AsyncClient(
             timeout=build_httpx_timeout(settings.http_timeout_settings),
             trust_env=False,

@@ -14,7 +14,7 @@ def _env_text(name: str, default: str = "") -> str:
 
 @dataclass(frozen=True)
 class LLMEnvironmentSettings:
-    """Typed view of legacy LLM-related environment variables."""
+    """Typed view of LLM environment variables, including the gpt_* gateway alias."""
 
     provider: str = ""
     writing_model: str = ""
@@ -35,6 +35,12 @@ class LLMEnvironmentSettings:
 
     @classmethod
     def from_env(cls) -> "LLMEnvironmentSettings":
+        # Select credentials and endpoint together: an official OpenAI key must
+        # never inherit a gateway URL from a different configuration family.
+        openai_prefix = "OPENAI"
+        if not _env_text("OPENAI_API_KEY") and _env_text("gpt_API_KEY"):
+            openai_prefix = "gpt"
+
         return cls(
             provider=_env_text("LLM_PROVIDER").lower(),
             writing_model=_env_text("WRITING_MODEL"),
@@ -43,9 +49,9 @@ class LLMEnvironmentSettings:
             anthropic_auth_token=_env_text("ANTHROPIC_AUTH_TOKEN"),
             anthropic_base_url=_env_text("ANTHROPIC_BASE_URL"),
             anthropic_model=_env_text("ANTHROPIC_MODEL"),
-            openai_api_key=_env_text("OPENAI_API_KEY"),
-            openai_base_url=_env_text("OPENAI_BASE_URL"),
-            openai_model=_env_text("OPENAI_MODEL"),
+            openai_api_key=_env_text(f"{openai_prefix}_API_KEY"),
+            openai_base_url=_env_text(f"{openai_prefix}_BASE_URL"),
+            openai_model=_env_text(f"{openai_prefix}_MODEL"),
             gemini_api_key=_env_text("GEMINI_API_KEY"),
             gemini_base_url=_env_text("GEMINI_BASE_URL"),
             gemini_model=_env_text("GEMINI_MODEL"),

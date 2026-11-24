@@ -15,6 +15,9 @@ LLM_ENV_NAMES = (
     "OPENAI_API_KEY",
     "OPENAI_BASE_URL",
     "OPENAI_MODEL",
+    "gpt_API_KEY",
+    "gpt_BASE_URL",
+    "gpt_MODEL",
     "GEMINI_API_KEY",
     "GEMINI_BASE_URL",
     "GEMINI_MODEL",
@@ -88,3 +91,49 @@ def test_llm_environment_ark_base_url_default_and_override(monkeypatch):
 
     monkeypatch.setenv("ARK_BASE_URL", "https://ark.example/api/v3")
     assert LLMEnvironmentSettings.from_env().ark_base_url_or_default == "https://ark.example/api/v3"
+
+
+def test_gpt_gateway_alias_resolves_complete_openai_configuration(monkeypatch):
+    _clear_llm_env(monkeypatch)
+    monkeypatch.setenv("gpt_API_KEY", " gateway-key ")
+    monkeypatch.setenv("gpt_BASE_URL", " https://gateway.example/v1 ")
+    monkeypatch.setenv("gpt_MODEL", " gateway-model ")
+
+    settings = LLMEnvironmentSettings.from_env()
+
+    assert settings.openai_api_key == "gateway-key"
+    assert settings.openai_base_url == "https://gateway.example/v1"
+    assert settings.openai_model == "gateway-model"
+    assert settings.openai_preset_key == "custom-openai-compatible"
+
+
+def test_openai_credentials_take_precedence_without_inheriting_gateway_url(monkeypatch):
+    _clear_llm_env(monkeypatch)
+    monkeypatch.setenv("OPENAI_API_KEY", "official-key")
+    monkeypatch.setenv("OPENAI_MODEL", "official-model")
+    monkeypatch.setenv("gpt_API_KEY", "gateway-key")
+    monkeypatch.setenv("gpt_BASE_URL", "https://gateway.example/v1")
+    monkeypatch.setenv("gpt_MODEL", "gateway-model")
+
+    settings = LLMEnvironmentSettings.from_env()
+
+    assert settings.openai_api_key == "official-key"
+    assert settings.openai_base_url == ""
+    assert settings.openai_model == "official-model"
+    assert settings.openai_preset_key == "openai-official"
+
+
+def test_gpt_credentials_do_not_inherit_unrelated_openai_endpoint(monkeypatch):
+    _clear_llm_env(monkeypatch)
+    monkeypatch.setenv("OPENAI_API_KEY", " ")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://unrelated.example/v1")
+    monkeypatch.setenv("OPENAI_MODEL", "unrelated-model")
+    monkeypatch.setenv("gpt_API_KEY", "gateway-key")
+    monkeypatch.setenv("gpt_BASE_URL", "https://gateway.example/v1")
+    monkeypatch.setenv("gpt_MODEL", "gateway-model")
+
+    settings = LLMEnvironmentSettings.from_env()
+
+    assert settings.openai_api_key == "gateway-key"
+    assert settings.openai_base_url == "https://gateway.example/v1"
+    assert settings.openai_model == "gateway-model"
