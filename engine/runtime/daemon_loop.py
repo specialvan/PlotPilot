@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+import threading
 from typing import Any, Protocol, runtime_checkable
 
 logger = logging.getLogger(__name__)
@@ -22,7 +23,7 @@ class DaemonLoopHost(Protocol):
     async def _process_novel(self, novel: Any) -> None: ...
 
 
-def run_daemon_loop(host: DaemonLoopHost, *, banner: str | None = None) -> None:
+def run_daemon_loop(host: DaemonLoopHost, *, banner: str | None = None, stop_event=None) -> None:
     """守护进程主循环（事务最小化原则）
 
     AutopilotDaemon、StoryPipelineRunner、EngineDaemon 共用此循环。
@@ -35,51 +36,65 @@ def run_daemon_loop(host: DaemonLoopHost, *, banner: str | None = None) -> None:
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
-    loop_count = 0
-    while True:
-        loop_count += 1
-        loop_start = time.time()
+    stop_event = stop_event if stop_event is not None else threading.Event()
+    try:
+        loop_count = 0
+        while not stop_event.is_set():
+            loop_count += 1
+            loop_start = time.time()
 
-        host._write_daemon_heartbeat()
+            host._write_daemon_heartbeat()
 
-        if host.circuit_breaker and host.circuit_breaker.is_open():
-            wait = host.circuit_breaker.wait_seconds()
-            logger.warning("熔断器打开，暂停 %.0fs", wait)
-            time.sleep(min(wait, host.poll_interval))
-            continue
+            if host.circuit_breaker and host.circuit_breaker.is_open():
+                wait = host.circuit_breaker.wait_seconds()
+                logger.warning("熔断器打开，暂停 %.0fs", wait)
+                stop_event.wait(min(wait, host.poll_interval))
+                continue
 
-        try:
             try:
-                from application.engine.services.streaming_bus import streaming_bus
+                try:
+                    from application.engine.services.streaming_bus import streaming_bus
 
-                streaming_bus.consume_stop_signals()
-            except Exception:
-                pass
+                    streaming_bus.consume_stop_signals()
+                except Exception:
+                    pass
 
-            active_novels = host._get_active_novels()
+                active_novels = host._get_active_novels()
 
-            if active_novels:
-                host._cleanup_stale_stop_signals(active_novels)
+                if active_novels:
+                    host._cleanup_stale_stop_signals(active_novels)
 
-            if loop_count % 10 == 1:
-                logger.info("Loop #%s: 发现 %s 本活跃小说", loop_count, len(active_novels))
+                if loop_count % 10 == 1:
+                    logger.info("Loop #%s: 发现 %s 本活跃小说", loop_count, len(active_novels))
 
-            if active_novels:
-                for novel in active_novels:
-                    novel_start = time.time()
-                    loop.run_until_complete(host._process_novel(novel))
-                    novel_elapsed = time.time() - novel_start
-                    logger.debug(
-                        "   [%s] 处理耗时: %.2fs",
-                        getattr(getattr(novel, "novel_id", None), "value", novel),
-                        novel_elapsed,
-                    )
+                if active_novels:
+                    for novel in active_novels:
+                        if stop_event.is_set():
+                            break
+                        novel_start = time.time()
+                        loop.run_until_complete(host._process_novel(novel))
+                        novel_elapsed = time.time() - novel_start
+                        logger.debug(
+                            "   [%s] 处理耗时: %.2fs",
+                            getattr(getattr(novel, "novel_id", None), "value", novel),
+                            novel_elapsed,
+                        )
 
-        except Exception as e:
-            logger.error("Daemon 顶层异常: %s", e, exc_info=True)
+            except Exception as e:
+                logger.error("Daemon 顶层异常: %s", e, exc_info=True)
 
-        loop_elapsed = time.time() - loop_start
-        if loop_elapsed > host.poll_interval * 2:
-            logger.warning("Loop #%s 耗时过长: %.2fs", loop_count, loop_elapsed)
+            loop_elapsed = time.time() - loop_start
+            if loop_elapsed > host.poll_interval * 2:
+                logger.warning("Loop #%s 耗时过长: %.2fs", loop_count, loop_elapsed)
 
-        time.sleep(host.poll_interval)
+            stop_event.wait(host.poll_interval)
+    finally:
+        pending = asyncio.all_tasks(loop)
+        for task in pending:
+            task.cancel()
+        if pending:
+            loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+        loop.run_until_complete(loop.shutdown_asyncgens())
+        loop.run_until_complete(loop.shutdown_default_executor())
+        loop.close()
+        asyncio.set_event_loop(None)

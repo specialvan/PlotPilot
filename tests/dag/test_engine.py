@@ -11,6 +11,7 @@ from application.engine.dag.models import (
     NodeStatus,
 )
 from application.engine.dag.registry import BaseNode, NodeRegistry
+from application.engine.dag.validator import DAGValidator
 
 
 class TestDAGEngine:
@@ -19,6 +20,23 @@ class TestDAGEngine:
     def test_engine_creation(self):
         engine = DAGEngine()
         assert engine is not None
+
+    @pytest.mark.parametrize("with_business_cycle", [False, True])
+    def test_retry_cycle_rule_matches_validator(self, with_business_cycle):
+        dag = DAGDefinition(
+            id="retry-cycle", name="retry-cycle",
+            nodes=[NodeDefinition(id=name, type="gw_retry" if name == "gw_retry" else "exec_writer")
+                   for name in ("a", "b", "gw_retry")],
+            edges=[
+                EdgeDefinition(id="edge_a_retry", source="a", target="gw_retry"),
+                EdgeDefinition(id="edge_retry_b", source="gw_retry", target="b"),
+                EdgeDefinition(id="edge_b_a", source="b", target="a"),
+            ],
+        )
+        if with_business_cycle:
+            dag.edges.append(EdgeDefinition(id="edge_a_b", source="a", target="b"))
+        assert DAGEngine()._has_cycle(dag) is with_business_cycle
+        assert bool(DAGValidator()._check_acyclic(dag)) is with_business_cycle
 
     def test_has_cycle_detection(self):
         engine = DAGEngine()

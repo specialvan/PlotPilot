@@ -98,7 +98,7 @@ PlotPilot 内核由五个相互协作的子系统构成：
 ```
 
 关键工程特性：
-- **统一运行时入口**：API 宿主管理 `EngineDaemon`；`scripts/start_daemon.py` 提供独立构造入口，其持久化装配仍需完整启动验证
+- **统一运行时入口**：API 宿主管理 `EngineDaemon`；独立脚本已通过临时数据目录中的启动、队列写入和停止验证，可用 `python scripts/start_daemon.py --smoke-test` 复核；该测试不调用真实 LLM
 - **可回退写作路径**：默认 `StoryPipeline` 写作，`PLOTPILOT_USE_STORY_PIPELINE=off/legacy` 可临时回退
 - **熔断保护**：连续失败超过阈值自动暂停，附带诊断信息
 - **单写者路由（Write Dispatch）**：统一连接层的常规 SQLite 写入经跨进程队列串行提交；bypass、独立连接和恢复边界见[架构分析](docs/ARCHITECTURE_TRANSFERABILITY.md)
@@ -252,6 +252,7 @@ cd frontend && npm install && npm run dev
 | `EMBEDDING_MODEL_PATH` / `EMBEDDING_USE_GPU` | 本地嵌入模型路径与 GPU 开关 |
 | `VECTOR_STORE_ENABLED` / `VECTOR_STORE_TYPE` / `VECTOR_STORE_PATH` | 向量索引开关、类型与持久化目录 |
 | `CORS_ORIGINS` | 生产环境前端域名，逗号分隔 |
+| `PLOTPILOT_BIND_HOST` | Python 模块和 CLI 默认监听 `127.0.0.1`；需要对外监听时显式设置，例如 `0.0.0.0`；直接使用 uvicorn 时由 `--host` 控制 |
 | `DISABLE_AUTO_DAEMON` | 设为 `1` 禁止启动时自动拉起守护进程 |
 | `LOG_LEVEL` / `LOG_FILE` | 日志级别与路径 |
 | `PLOTPILOT_CLOUD_BASE_URL` / `PLOTPILOT_CLOUD_CLIENT_NAME` / `PLOTPILOT_CLOUD_TIMEOUT` | 云广场连接器：端点（默认 `https://plotpilot.xyz`）、客户端标识（默认 `plotpilot-kernel`）、请求超时秒数 |

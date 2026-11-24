@@ -47,7 +47,7 @@ class EngineDaemon:
     def use_story_pipeline_for_writing(self) -> bool:
         return self._use_story_pipeline_for_writing
 
-    def run_forever(self) -> None:
+    def run_forever(self, *, stop_event=None) -> None:
         writing_mode = "StoryPipeline" if self._use_story_pipeline_for_writing else "legacy"
         logger.info("=" * 80)
         logger.info("EngineDaemon Started (Phase 9)")
@@ -55,7 +55,10 @@ class EngineDaemon:
         logger.info("  写作: %s", writing_mode)
         logger.info("  规划/审计: engine/runtime delegates")
         logger.info("=" * 80)
-        self._runner.run_forever()
+        if stop_event is None:
+            self._runner.run_forever()
+        else:
+            self._runner.run_forever(stop_event=stop_event)
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._runner, name)

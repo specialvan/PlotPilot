@@ -126,12 +126,29 @@ uvicorn interfaces.main:app --host 127.0.0.1 --port 8005 --reload
 可选方式：
 
 ```bash
-# 直接运行 FastAPI 模块（默认 0.0.0.0:8000，与 README 的 8005 不同，需自行改端口或改用 uvicorn）
+# 直接运行 FastAPI 模块（默认 127.0.0.1:8000；监听地址由 PLOTPILOT_BIND_HOST 控制）
 python interfaces/main.py
 
 # EngineDaemon 守护进程（当前维护入口）
 python scripts/start_daemon.py
+
+# 临时数据目录中的完整启动、常规队列写入、读取和停止验证，不调用真实 LLM
+python scripts/start_daemon.py --smoke-test
 ```
+
+独立脚本在启动阶段初始化数据库，随后注册并启动本进程的 SQLite 消费者；关闭时先停止 daemon，再排空队列和关闭数据库。`--smoke-test` 在独立子进程中设置临时数据目录、关闭环境直写和向量存储，退出后删除临时目录。
+
+## 写入与采纳提交边界
+
+`write_dispatch` 用 `ContextVar[int]` 隔离 bypass 深度，启动包装器仍可使用。运行期 bypass 必须提供非空 `reason`，每次进入都会计数并记录日志。`asyncio.to_thread` 会复制上下文，`run_in_executor` 和裸线程不会自动复制；不要把 bypass 当作后台任务的默认授权。Invocation API 原有 14 处 bypass 已改为等待 writer 完成，异步路由将阻塞操作交给线程。
+
+生产采纳提交先用 `(session_id, decision_id)` 幂等键创建记录，再执行 continuation。执行期间使用本机文件锁串行化同一 decision，每个步骤先记录 running，完成后记录结果；重试复用 succeeded 步骤和最终结果。`save_commit` 按幂等键更新并保留原始 ID。daemon 子进程通过带响应的队列请求向 SQLite 所在进程提交；协调线程在 writer 外等待锁，再把各数据库操作交给 writer。
+
+步骤回执不能自动保证副作用只发生一次。continuation 只有实现自身幂等并显式声明 `retry_safe=True` 后才可恢复执行；未声明的中断步骤要求先补偿。正文写入与局部回执、章节计数和节拍进度在同一事务提交，章节投影也有事务回执；变量输出以 `source_commit_id` 去重。文件锁约束限于共享同一本机数据目录的进程，不保证网络文件系统部署。普通 SQL 队列仍是内存通道，入队成功不等于落库，也没有持久化任务重放日志。
+
+## 依赖增量门禁
+
+`config/architecture_import_baseline.json` 固定整改前 `47959b8e` 中 application→infrastructure 的 352 条 import。检查按文件、AST 规范化语句和重复次数比较，允许减少，不允许以删旧换新抵消新增。运行 `python scripts/analyze_architecture.py --check-baseline config/architecture_import_baseline.json`；后端 CI 同时检查该基线并运行 `tests/unit` 与 `tests/dag`。基线用于限制耦合增长，现有依赖仍需逐步迁移到端口。
 
 ## Web 前端（Vue 3）
 

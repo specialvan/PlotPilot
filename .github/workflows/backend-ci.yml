@@ -1,12 +1,25 @@
 name: Backend CI
 
 on:
+  push:
+    branches: [master]
+    paths:
+      - "**.py"
+      - "requirements*.txt"
+      - "pyproject.toml"
+      - "pytest.ini"
+      - "config/architecture_import_baseline.json"
+      - ".github/workflows/backend-ci.yml"
+      - "infrastructure/ai/prompt_packages/**"
   pull_request:
     paths:
       - "**.py"
       - "requirements*.txt"
       - "pyproject.toml"
       - "pytest.ini"
+      - "config/architecture_import_baseline.json"
+      - ".github/workflows/backend-ci.yml"
+      - "infrastructure/ai/prompt_packages/**"
 
 jobs:
   test:
@@ -22,8 +35,11 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Check architecture dependency baseline
+        run: python scripts/analyze_architecture.py --check-baseline config/architecture_import_baseline.json
+
       - name: Run unit tests
-        run: pytest tests/unit -q --tb=short
+        run: pytest tests/unit tests/dag -q --tb=short
         env:
           # 单测不需要真实 key，用占位值防止启动时报错
           ANTHROPIC_API_KEY: "test-placeholder"

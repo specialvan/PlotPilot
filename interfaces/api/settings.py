@@ -113,6 +113,7 @@ class BackendSettings:
     api_v1_prefix: str = API_V1_PREFIX
     novels_api_prefix: str = NOVELS_API_PREFIX
     stats_api_prefix: str = STATS_API_PREFIX
+    bind_host: str = "127.0.0.1"
     log_level: str = "INFO"
     log_file: str = "logs/plotpilot.log"
     cors_origins: tuple[str, ...] = ("*",)
@@ -133,6 +134,7 @@ class BackendSettings:
             "yes",
         )
         return cls(
+            bind_host=os.getenv("PLOTPILOT_BIND_HOST", "").strip() or "127.0.0.1",
             log_level=os.getenv("LOG_LEVEL", "INFO"),
             log_file=os.getenv("LOG_FILE", "logs/plotpilot.log"),
             cors_origins=cors_origins,

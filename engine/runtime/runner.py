@@ -115,7 +115,7 @@ class StoryPipelineRunner(DaemonHostMixin, BaseStoryPipeline):
 
         return ctx
 
-    def run_forever(self) -> None:
+    def run_forever(self, *, stop_event=None) -> None:
         from engine.runtime.daemon_loop import run_daemon_loop
 
         banner = (
@@ -123,7 +123,7 @@ class StoryPipelineRunner(DaemonHostMixin, BaseStoryPipeline):
             f"circuit_breaker={'on' if self.circuit_breaker else 'off'} | "
             f"story_pipeline={'on' if self.use_story_pipeline_for_writing else 'off'}"
         )
-        run_daemon_loop(self, banner=banner)
+        run_daemon_loop(self, banner=banner, stop_event=stop_event)
 
     async def _process_novel(self, novel: Any) -> None:
         from engine.runtime.novel_lifecycle import process_novel

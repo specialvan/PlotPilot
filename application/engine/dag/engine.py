@@ -24,6 +24,7 @@ from application.engine.dag.models import (
     NovelWorkflowState,
 )
 from application.engine.dag.registry import NodeRegistry
+from application.engine.dag.validator import DAGValidator
 
 logger = logging.getLogger(__name__)
 
@@ -335,29 +336,8 @@ class DAGEngine:
         return errors
 
     def _has_cycle(self, dag: DAGDefinition) -> bool:
-        """DFS 环检测"""
-        WHITE, GRAY, BLACK = 0, 1, 2
-        color = {n.id: WHITE for n in dag.nodes}
-        adj = defaultdict(list)
-        for edge in dag.edges:
-            adj[edge.source].append(edge.target)
-
-        def dfs(node_id: str) -> bool:
-            color[node_id] = GRAY
-            for neighbor in adj[node_id]:
-                if color.get(neighbor) == GRAY:
-                    return True
-                if color.get(neighbor, WHITE) == WHITE:
-                    if dfs(neighbor):
-                        return True
-            color[node_id] = BLACK
-            return False
-
-        for node in dag.nodes:
-            if color[node.id] == WHITE:
-                if dfs(node.id):
-                    return True
-        return False
+        """Use the same retry-gateway exception as the published validator."""
+        return bool(DAGValidator()._check_acyclic(dag))
 
 
 # ─── 辅助函数 ───

@@ -7,9 +7,45 @@ import os
 import sys
 import logging
 import time
+import argparse
+import json
+import signal
+import subprocess
+import tempfile
+import threading
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
+
+
+def _isolated_smoke_test() -> int:
+    """Set data paths before any application imports, inside a fresh process."""
+    with tempfile.TemporaryDirectory(prefix="plotpilot-daemon-smoke-") as directory:
+        environment = os.environ.copy()
+        environment.update({
+            "PLOTPILOT_PROD_DATA_DIR": directory,
+            "PLOTPILOT_ALLOW_DIRECT_SQLITE_WRITES": "0",
+            "AITEXT_ALLOW_DIRECT_SQLITE_WRITES": "0",
+            "VECTOR_STORE_ENABLED": "false",
+            "LOG_FILE": str(Path(directory) / "daemon.log"),
+            "PYTHONIOENCODING": "utf-8",
+        })
+        result = subprocess.run([sys.executable, str(Path(__file__).resolve()), "--smoke-worker"],
+                                env=environment, timeout=90, capture_output=True, encoding="utf-8", errors="replace")
+        if result.returncode:
+            sys.stderr.write(result.stdout + result.stderr)
+        else:
+            print(result.stdout.strip())
+        return result.returncode
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--smoke-test", action="store_true", help="在临时数据目录验证完整启动、队列写入和停止")
+    parser.add_argument("--smoke-worker", action="store_true", help=argparse.SUPPRESS)
+    _arguments = parser.parse_args()
+    if _arguments.smoke_test:
+        raise SystemExit(_isolated_smoke_test())
 
 from infrastructure.ai.process_environment import configure_huggingface_process_environment
 
@@ -232,16 +268,88 @@ def build_daemon():
     )
 
 
-if __name__ == "__main__":
-    logger.info("=" * 80)
-    logger.info("🚀 Autopilot Daemon v2 Starting（日志写入 %s）", _log_file)
-    logger.info("=" * 80)
+def _smoke_lifecycle(daemon, queue, db):
+    started = threading.Event()
+    stop_event = threading.Event()
+    failures = []
 
-    daemon = build_daemon()
+    class StartedHandler(logging.Handler):
+        def emit(self, record):
+            if record.name == "engine.runtime.daemon_loop" and record.getMessage().startswith("Loop #1:"):
+                started.set()
+
+    handler = StartedHandler()
+    logging.getLogger("engine.runtime.daemon_loop").addHandler(handler)
+    daemon.runner.poll_interval = 0.05
+
+    def run():
+        try:
+            daemon.run_forever(stop_event=stop_event)
+        except BaseException as exc:
+            failures.append(exc)
+            started.set()
+
+    thread = threading.Thread(target=run, name="DaemonSmoke", daemon=True)
+    thread.start()
     try:
-        daemon.run_forever()
-    except KeyboardInterrupt:
-        logger.info("守护进程已停止（KeyboardInterrupt）")
-    except Exception as e:
-        logger.error(f"守护进程异常退出：{e}", exc_info=True)
-        raise
+        if not started.wait(20) or failures:
+            raise RuntimeError(f"Daemon failed to start: {failures}")
+        # Use the normal serializable SQL command, then an acknowledged writer
+        # barrier and a separate reader. The smoke never enables runtime bypass.
+        db.execute("INSERT INTO novels (id, title, slug, autopilot_status) VALUES (?, ?, ?, ?)",
+                   ("daemon-smoke", "Daemon smoke", "daemon-smoke", "paused"))
+        queue.call_on_writer(lambda: None)
+        row = db.fetch_one("SELECT title FROM novels WHERE id = ?", ("daemon-smoke",))
+        if row is None or row["title"] != "Daemon smoke":
+            raise RuntimeError("Daemon smoke write was not committed")
+    finally:
+        stop_event.set()
+        thread.join(timeout=10)
+        logging.getLogger("engine.runtime.daemon_loop").removeHandler(handler)
+    if thread.is_alive() or failures:
+        raise RuntimeError(f"Daemon did not stop cleanly: {failures}")
+    return {"started": True, "write_committed": True, "stopped": True, "database": str(db.db_path)}
+
+
+def main(*, smoke_test=False):
+    from application.engine.services.persistence_queue import get_persistence_queue, register_persistence_handlers
+    from infrastructure.persistence.database.adoption_dispatch import register_adoption_commit_handler
+    from infrastructure.persistence.database.write_dispatch import startup_sqlite_writes_bypass_queue, run_on_sqlite_writer
+
+    queue = get_persistence_queue()
+    queue.initialize()
+    register_persistence_handlers()
+    register_adoption_commit_handler(queue)
+    db = None
+    try:
+        with startup_sqlite_writes_bypass_queue():
+            db = get_database(get_db_path())
+        queue.start_consumer()
+        daemon = run_on_sqlite_writer(build_daemon)
+        if smoke_test:
+            result = _smoke_lifecycle(daemon, queue, db)
+        else:
+            stop_event = threading.Event()
+            previous = {}
+            for signum in (signal.SIGINT, signal.SIGTERM):
+                previous[signum] = signal.signal(signum, lambda *_: stop_event.set())
+            try:
+                daemon.run_forever(stop_event=stop_event)
+            finally:
+                for signum, old_handler in previous.items():
+                    signal.signal(signum, old_handler)
+            result = None
+    finally:
+        queue.stop_consumer()
+        if queue.is_consumer_running():
+            raise RuntimeError("Daemon SQLite consumer did not stop")
+        queue.get_queue().close()
+        queue.get_queue().join_thread()
+        if db is not None:
+            db.close_all()
+    if smoke_test:
+        print(json.dumps({**result, "writer_stopped": True}, ensure_ascii=False))
+
+
+if __name__ == "__main__":
+    main(smoke_test=_arguments.smoke_worker)

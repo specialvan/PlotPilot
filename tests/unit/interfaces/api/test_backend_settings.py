@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from interfaces.api.settings import (
     API_V1_PREFIX,
     BackendSettings,
@@ -108,3 +110,12 @@ def test_configure_process_environment_preserves_required_offline_flags(monkeypa
     assert __import__("os").environ["HF_DATASETS_OFFLINE"] == "1"
     assert __import__("os").environ["CURL_CA_BUNDLE"] == ""
     assert __import__("os").environ["REQUESTS_CA_BUNDLE"] == ""
+
+
+@pytest.mark.parametrize("value, expected", [(None, "127.0.0.1"), ("", "127.0.0.1"), ("0.0.0.0", "0.0.0.0")])
+def test_backend_bind_host_is_explicit(monkeypatch, value, expected):
+    if value is None:
+        monkeypatch.delenv("PLOTPILOT_BIND_HOST", raising=False)
+    else:
+        monkeypatch.setenv("PLOTPILOT_BIND_HOST", value)
+    assert BackendSettings.from_env().bind_host == expected

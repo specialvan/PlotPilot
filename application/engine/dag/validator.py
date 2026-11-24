@@ -125,10 +125,13 @@ class DAGValidator:
         """DFS 三色环检测 — 允许通过 gw_retry 的合法重试循环"""
         errors = []
 
-        # 构建邻接表，包含条件信息
+        # Removing the retry gateway breaks all permitted cycles. Check the
+        # remaining graph so a business subcycle cannot hide inside a larger
+        # strongly connected component that also contains gw_retry.
         adj = defaultdict(list)
         for edge in dag.edges:
-            adj[edge.source].append((edge.target, edge.condition))
+            if edge.source != "gw_retry" and edge.target != "gw_retry":
+                adj[edge.source].append((edge.target, edge.condition))
 
         WHITE, GRAY, BLACK = 0, 1, 2
         color = {node.id: WHITE for node in dag.nodes}

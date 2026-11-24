@@ -1,0 +1,1429 @@
+{
+  "version": 1,
+  "source_commit": "47959b8e",
+  "source_layer": "application",
+  "target_layer": "infrastructure",
+  "total_statements": 352,
+  "imports": [
+    {
+      "path": "application/ai/chapter_state_llm_contract.py",
+      "statement": "from infrastructure.ai.prompt_keys import CHAPTER_STATE_EXTRACTION",
+      "count": 1
+    },
+    {
+      "path": "application/ai/chapter_state_llm_contract.py",
+      "statement": "from infrastructure.ai.prompt_utils import get_required_prompt_system",
+      "count": 1
+    },
+    {
+      "path": "application/ai/embedding_config_service.py",
+      "statement": "from infrastructure.ai.embedding_environment import EmbeddingEnvironmentSettings",
+      "count": 1
+    },
+    {
+      "path": "application/ai/embedding_config_service.py",
+      "statement": "from infrastructure.persistence.database.connection import get_database",
+      "count": 1
+    },
+    {
+      "path": "application/ai/knowledge_llm_contract.py",
+      "statement": "from infrastructure.ai.prompt_keys import KNOWLEDGE_INITIAL as _KNOWLEDGE_NODE_KEY",
+      "count": 1
+    },
+    {
+      "path": "application/ai/knowledge_llm_contract.py",
+      "statement": "from infrastructure.ai.prompt_utils import get_required_prompt_system",
+      "count": 1
+    },
+    {
+      "path": "application/ai/llm_control_service.py",
+      "statement": "from infrastructure.ai.llm_environment import LLMEnvironmentSettings",
+      "count": 1
+    },
+    {
+      "path": "application/ai/llm_control_service.py",
+      "statement": "from infrastructure.ai.url_utils import normalize_anthropic_base_url, normalize_gemini_base_url, normalize_openai_base_url",
+      "count": 1
+    },
+    {
+      "path": "application/ai/llm_control_service.py",
+      "statement": "from infrastructure.persistence.database.connection import get_database",
+      "count": 1
+    },
+    {
+      "path": "application/ai/structured_json_pipeline.py",
+      "statement": "from infrastructure.ai.trace_recorder import get_trace_recorder",
+      "count": 1
+    },
+    {
+      "path": "application/ai_invocation/autopilot/continuations.py",
+      "statement": "from infrastructure.persistence.database.connection import get_database",
+      "count": 3
+    },
+    {
+      "path": "application/ai_invocation/autopilot/continuations.py",
+      "statement": "from infrastructure.persistence.database.write_dispatch import sqlite_writes_bypass_queue",
+      "count": 3
+    },
+    {
+      "path": "application/ai_invocation/autopilot/factory.py",
+      "statement": "from infrastructure.persistence.database.connection import get_database",
+      "count": 2
+    },
+    {
+      "path": "application/ai_invocation/autopilot/factory.py",
+      "statement": "from infrastructure.persistence.database.sqlite_ai_invocation_repository import SqliteAdoptionRepository, SqliteInvocationAttemptRepository, SqliteInvocationSessionRepository, SqliteInvocationSpecRepository, SqliteVariableHubRepository",
+      "count": 1
+    },
+    {
+      "path": "application/ai_invocation/autopilot/helper_invoker.py",
+      "statement": "from infrastructure.ai.prompt_utils import PromptTemplateUnavailable",
+      "count": 1
+    },
+    {
+      "path": "application/ai_invocation/autopilot/orchestrator.py",
+      "statement": "from infrastructure.persistence.database.write_dispatch import sqlite_writes_bypass_queue",
+      "count": 1
+    },
+    {
+      "path": "application/ai_invocation/contracts/autopilot_helpers.py",
+      "statement": "from infrastructure.ai.prompt_keys import BEAT_COT_BRIDGE, CHAPTER_BRIDGE_CHECK, CHAPTER_BRIDGE_EXTRACT, CHAPTER_BRIDGE_FIX, CHAPTER_NARRATIVE_SYNC, TENSION_SCORING, VOICE_REWRITE",
+      "count": 1
+    },
+    {
+      "path": "application/ai_invocation/contracts/autopilot_helpers.py",
+      "statement": "from infrastructure.ai.prompt_manager import get_prompt_manager",
+      "count": 1
+    },
+    {
+      "path": "application/ai_invocation/contracts/autopilot_helpers.py",
+      "statement": "from infrastructure.ai.prompt_registry import get_prompt_registry",
+      "count": 2
+    },
+    {
+      "path": "application/ai_invocation/contracts/autopilot_helpers.py",
+      "statement": "from infrastructure.ai.prompt_template_engine import get_template_engine",
+      "count": 1
+    },
+    {
+      "path": "application/ai_invocation/contracts/autopilot_helpers.py",
+      "statement": "from infrastructure.persistence.database.connection import get_database",
+      "count": 7
+    },
+    {
+      "path": "application/ai_invocation/contracts/autopilot_helpers.py",
+      "statement": "from infrastructure.persistence.database.sqlite_ai_invocation_repository import SqliteInvocationSpecRepository, SqliteVariableHubRepository",
+      "count": 1
+    },
+    {
+      "path": "application/ai_invocation/contracts/autopilot_helpers.py",
+      "statement": "from infrastructure.persistence.database.write_dispatch import sqlite_writes_bypass_queue",
+      "count": 1
+    },
+    {
+      "path": "application/ai_invocation/contracts/autopilot_planning.py",
+      "statement": "from infrastructure.ai.prompt_keys import OUTLINE_BEAT_PARTITION, PLANNING_ACT, PLANNING_QUICK_MACRO",
+      "count": 1
+    },
+    {
+      "path": "application/ai_invocation/contracts/autopilot_planning.py",
+      "statement": "from infrastructure.ai.prompt_manager import get_prompt_manager",
+      "count": 1
+    },
+    {
+      "path": "application/ai_invocation/contracts/autopilot_planning.py",
+      "statement": "from infrastructure.ai.prompt_registry import get_prompt_registry",
+      "count": 2
+    },
+    {
+      "path": "application/ai_invocation/contracts/autopilot_planning.py",
+      "statement": "from infrastructure.ai.prompt_template_engine import get_template_engine",
+      "count": 1
+    },
+    {
+      "path": "application/ai_invocation/contracts/autopilot_planning.py",
+      "statement": "from infrastructure.persistence.database.connection import get_database",
+      "count": 3
+    },
+    {
+      "path": "application/ai_invocation/contracts/autopilot_planning.py",
+      "statement": "from infrastructure.persistence.database.sqlite_ai_invocation_repository import SqliteInvocationSpecRepository, SqliteVariableHubRepository",
+      "count": 1
+    },
+    {
+      "path": "application/ai_invocation/contracts/autopilot_planning.py",
+      "statement": "from infrastructure.persistence.database.write_dispatch import sqlite_writes_bypass_queue",
+      "count": 1
+    },
+    {
+      "path": "application/ai_invocation/contracts/autopilot_writing.py",
+      "statement": "from infrastructure.ai.prompt_keys import ANTI_AI_CHAPTER_AUDIT, AUTOPILOT_STREAM_BEAT, CHAPTER_AFTERMATH, CHAPTER_PROSE_GENERATION",
+      "count": 1
+    },
+    {
+      "path": "application/ai_invocation/contracts/autopilot_writing.py",
+      "statement": "from infrastructure.ai.prompt_manager import get_prompt_manager",
+      "count": 1
+    },
+    {
+      "path": "application/ai_invocation/contracts/autopilot_writing.py",
+      "statement": "from infrastructure.ai.prompt_registry import get_prompt_registry",
+      "count": 1
+    },
+    {
+      "path": "application/ai_invocation/contracts/autopilot_writing.py",
+      "statement": "from infrastructure.persistence.database.connection import get_database",
+      "count": 4
+    },
+    {
+      "path": "application/ai_invocation/contracts/autopilot_writing.py",
+      "statement": "from infrastructure.persistence.database.sqlite_ai_invocation_repository import SqliteInvocationSpecRepository, SqliteVariableHubRepository",
+      "count": 4
+    },
+    {
+      "path": "application/ai_invocation/contracts/autopilot_writing.py",
+      "statement": "from infrastructure.persistence.database.write_dispatch import sqlite_writes_bypass_queue",
+      "count": 1
+    },
+    {
+      "path": "application/ai_invocation/contracts/chapter_prose_generation.py",
+      "statement": "from infrastructure.ai.prompt_keys import CHAPTER_PROSE_GENERATION",
+      "count": 1
+    },
+    {
+      "path": "application/ai_invocation/contracts/chapter_prose_generation.py",
+      "statement": "from infrastructure.ai.prompt_manager import get_prompt_manager",
+      "count": 1
+    },
+    {
+      "path": "application/ai_invocation/contracts/chapter_prose_generation.py",
+      "statement": "from infrastructure.ai.prompt_registry import get_prompt_registry",
+      "count": 1
+    },
+    {
+      "path": "application/ai_invocation/contracts/chapter_prose_generation.py",
+      "statement": "from infrastructure.persistence.database.sqlite_ai_invocation_repository import SqliteInvocationSpecRepository, SqliteVariableHubRepository",
+      "count": 1
+    },
+    {
+      "path": "application/ai_invocation/contracts/chapter_prose_generation.py",
+      "statement": "from infrastructure.persistence.database.write_dispatch import sqlite_writes_bypass_queue",
+      "count": 1
+    },
+    {
+      "path": "application/ai_invocation/contracts/registry.py",
+      "statement": "from infrastructure.ai.prompt_keys import CHAPTER_GENERATION_MAIN, CHAPTER_PROSE_GENERATION",
+      "count": 1
+    },
+    {
+      "path": "application/ai_invocation/contracts/registry.py",
+      "statement": "from infrastructure.ai.prompt_registry import get_prompt_registry",
+      "count": 1
+    },
+    {
+      "path": "application/ai_invocation/contracts/registry.py",
+      "statement": "from infrastructure.ai.prompt_template_engine import get_template_engine",
+      "count": 1
+    },
+    {
+      "path": "application/ai_invocation/contracts/registry.py",
+      "statement": "from infrastructure.persistence.database.connection import get_database",
+      "count": 1
+    },
+    {
+      "path": "application/ai_invocation/contracts/registry.py",
+      "statement": "from infrastructure.persistence.database.sqlite_ai_invocation_repository import SqliteInvocationSpecRepository",
+      "count": 1
+    },
+    {
+      "path": "application/ai_invocation/contracts/registry.py",
+      "statement": "from infrastructure.persistence.database.sqlite_ai_invocation_repository import SqliteInvocationSpecRepository, SqliteVariableHubRepository",
+      "count": 1
+    },
+    {
+      "path": "application/ai_invocation/contracts/registry.py",
+      "statement": "from infrastructure.persistence.database.write_dispatch import sqlite_writes_bypass_queue",
+      "count": 1
+    },
+    {
+      "path": "application/ai_invocation/output_binding_resolution.py",
+      "statement": "from infrastructure.persistence.database.connection import get_database",
+      "count": 2
+    },
+    {
+      "path": "application/ai_invocation/output_binding_resolution.py",
+      "statement": "from infrastructure.persistence.database.sqlite_ai_invocation_repository import SqliteInvocationSpecRepository, SqliteVariableHubRepository",
+      "count": 1
+    },
+    {
+      "path": "application/ai_invocation/output_binding_resolution.py",
+      "statement": "from infrastructure.persistence.database.sqlite_ai_invocation_repository import SqliteVariableHubRepository",
+      "count": 1
+    },
+    {
+      "path": "application/ai_invocation/prompt_assembler.py",
+      "statement": "from infrastructure.ai.prompt_registry import get_prompt_registry",
+      "count": 1
+    },
+    {
+      "path": "application/ai_invocation/prompt_assembler.py",
+      "statement": "from infrastructure.ai.prompt_template_engine import get_template_engine",
+      "count": 1
+    },
+    {
+      "path": "application/ai_invocation/services.py",
+      "statement": "from infrastructure.ai.prompt_manager import get_prompt_manager",
+      "count": 1
+    },
+    {
+      "path": "application/ai_invocation/services.py",
+      "statement": "from infrastructure.ai.prompt_registry import get_prompt_registry",
+      "count": 1
+    },
+    {
+      "path": "application/ai_invocation/services.py",
+      "statement": "from infrastructure.ai.prompt_template_engine import get_template_engine",
+      "count": 1
+    },
+    {
+      "path": "application/ai_invocation/services.py",
+      "statement": "from infrastructure.persistence.database.connection import get_database",
+      "count": 3
+    },
+    {
+      "path": "application/ai_invocation/services.py",
+      "statement": "from infrastructure.persistence.database.sqlite_ai_invocation_repository import SqliteInvocationSpecRepository",
+      "count": 1
+    },
+    {
+      "path": "application/ai_invocation/services.py",
+      "statement": "from infrastructure.persistence.database.sqlite_ai_invocation_repository import SqliteVariableHubRepository",
+      "count": 1
+    },
+    {
+      "path": "application/analyst/services/llm_voice_analysis_service.py",
+      "statement": "from infrastructure.ai.generation_profiles import generation_config_from_profile",
+      "count": 1
+    },
+    {
+      "path": "application/analyst/services/llm_voice_analysis_service.py",
+      "statement": "from infrastructure.ai.prompt_contracts.style_analysis import STYLE_ANALYSIS_CONTRACT",
+      "count": 1
+    },
+    {
+      "path": "application/analyst/services/llm_voice_analysis_service.py",
+      "statement": "from infrastructure.ai.prompt_contracts.voice_baseline_analysis import VOICE_BASELINE_ANALYSIS_CONTRACT",
+      "count": 1
+    },
+    {
+      "path": "application/analyst/services/llm_voice_analysis_service.py",
+      "statement": "from infrastructure.ai.prompt_gateway import get_prompt_gateway",
+      "count": 1
+    },
+    {
+      "path": "application/analyst/services/state_extractor.py",
+      "statement": "from infrastructure.ai.llm_environment import LLMEnvironmentSettings",
+      "count": 1
+    },
+    {
+      "path": "application/analyst/services/state_extractor.py",
+      "statement": "from infrastructure.ai.prompt_keys import CHAPTER_STATE_EXTRACTION",
+      "count": 1
+    },
+    {
+      "path": "application/analyst/services/state_extractor.py",
+      "statement": "from infrastructure.ai.prompt_utils import render_required_prompt",
+      "count": 1
+    },
+    {
+      "path": "application/analyst/services/tension_analyzer.py",
+      "statement": "from infrastructure.ai.prompt_contracts.tension_analysis_diagnosis import TENSION_ANALYSIS_DIAGNOSIS_CONTRACT",
+      "count": 1
+    },
+    {
+      "path": "application/analyst/services/tension_analyzer.py",
+      "statement": "from infrastructure.ai.prompt_gateway import PromptGatewayValidationError, get_prompt_gateway",
+      "count": 1
+    },
+    {
+      "path": "application/analyst/services/tension_scoring_service.py",
+      "statement": "from infrastructure.ai.generation_profiles import generation_config_from_profile",
+      "count": 1
+    },
+    {
+      "path": "application/analyst/services/tension_scoring_service.py",
+      "statement": "from infrastructure.ai.prompt_contract import PromptContract",
+      "count": 1
+    },
+    {
+      "path": "application/analyst/services/tension_scoring_service.py",
+      "statement": "from infrastructure.ai.prompt_gateway import PromptGatewayError, get_prompt_gateway",
+      "count": 1
+    },
+    {
+      "path": "application/analyst/services/tension_scoring_service.py",
+      "statement": "from infrastructure.ai.prompt_keys import TENSION_SCORING",
+      "count": 1
+    },
+    {
+      "path": "application/audit/services/chapter_ai_review_service.py",
+      "statement": "from infrastructure.ai.generation_profiles import generation_config_from_profile",
+      "count": 1
+    },
+    {
+      "path": "application/audit/services/chapter_ai_review_service.py",
+      "statement": "from infrastructure.ai.prompt_keys import CHAPTER_AI_REVIEW",
+      "count": 1
+    },
+    {
+      "path": "application/audit/services/chapter_ai_review_service.py",
+      "statement": "from infrastructure.ai.prompt_utils import render_required_prompt",
+      "count": 1
+    },
+    {
+      "path": "application/audit/services/chapter_review_service.py",
+      "statement": "from infrastructure.ai.chromadb_vector_store import ChromaDBVectorStore",
+      "count": 1
+    },
+    {
+      "path": "application/audit/services/chapter_review_service.py",
+      "statement": "from infrastructure.ai.generation_profiles import generation_config_from_profile",
+      "count": 1
+    },
+    {
+      "path": "application/audit/services/chapter_review_service.py",
+      "statement": "from infrastructure.ai.llm_environment import LLMEnvironmentSettings",
+      "count": 1
+    },
+    {
+      "path": "application/audit/services/chapter_review_service.py",
+      "statement": "from infrastructure.ai.prompt_contract import PromptContract",
+      "count": 1
+    },
+    {
+      "path": "application/audit/services/chapter_review_service.py",
+      "statement": "from infrastructure.ai.prompt_gateway import get_prompt_gateway",
+      "count": 1
+    },
+    {
+      "path": "application/audit/services/chapter_review_service.py",
+      "statement": "from infrastructure.ai.prompt_keys import REVIEW_CHARACTER_CONSISTENCY, REVIEW_TIMELINE_CONSISTENCY, REVIEW_STORYLINE_CONSISTENCY, REVIEW_FORESHADOWING_USAGE, REVIEW_IMPROVEMENT_SUGGESTIONS",
+      "count": 1
+    },
+    {
+      "path": "application/audit/services/macro_diagnosis_service.py",
+      "statement": "from infrastructure.persistence.database.connection import DatabaseConnection",
+      "count": 1
+    },
+    {
+      "path": "application/audit/services/macro_refactor_proposal_service.py",
+      "statement": "from infrastructure.ai.llm_environment import LLMEnvironmentSettings",
+      "count": 1
+    },
+    {
+      "path": "application/audit/services/macro_refactor_proposal_service.py",
+      "statement": "from infrastructure.ai.prompt_keys import REFACTOR_PROPOSAL_MACRO",
+      "count": 1
+    },
+    {
+      "path": "application/audit/services/macro_refactor_proposal_service.py",
+      "statement": "from infrastructure.ai.prompt_utils import PromptTemplateUnavailable",
+      "count": 1
+    },
+    {
+      "path": "application/audit/services/macro_refactor_proposal_service.py",
+      "statement": "from infrastructure.ai.prompt_utils import render_required_prompt",
+      "count": 1
+    },
+    {
+      "path": "application/blueprint/services/beat_sheet_service.py",
+      "statement": "from infrastructure.ai.chromadb_vector_store import ChromaDBVectorStore",
+      "count": 1
+    },
+    {
+      "path": "application/blueprint/services/beat_sheet_service.py",
+      "statement": "from infrastructure.ai.prompt_keys import BEAT_SHEET_DECOMPOSITION",
+      "count": 1
+    },
+    {
+      "path": "application/blueprint/services/beat_sheet_service.py",
+      "statement": "from infrastructure.ai.prompt_utils import render_required_prompt",
+      "count": 1
+    },
+    {
+      "path": "application/blueprint/services/beat_sheet_service.py",
+      "statement": "from infrastructure.persistence.database.connection import get_database",
+      "count": 2
+    },
+    {
+      "path": "application/blueprint/services/beat_sheet_service.py",
+      "statement": "from infrastructure.persistence.database.sqlite_cast_repository import SqliteCastRepository",
+      "count": 1
+    },
+    {
+      "path": "application/blueprint/services/beat_sheet_service.py",
+      "statement": "from infrastructure.persistence.database.sqlite_timeline_repository import SqliteTimelineRepository",
+      "count": 1
+    },
+    {
+      "path": "application/blueprint/services/chapter_book_structure_sync.py",
+      "statement": "from infrastructure.persistence.database.story_node_repository import StoryNodeRepository",
+      "count": 1
+    },
+    {
+      "path": "application/blueprint/services/chapter_preplanning_service.py",
+      "statement": "from infrastructure.ai.generation_profiles import generation_config_from_profile",
+      "count": 1
+    },
+    {
+      "path": "application/blueprint/services/chapter_preplanning_service.py",
+      "statement": "from infrastructure.ai.prompt_contracts.continuous_planning import PLANNING_CHAPTER_PREPLAN_CONTRACT",
+      "count": 1
+    },
+    {
+      "path": "application/blueprint/services/chapter_preplanning_service.py",
+      "statement": "from infrastructure.ai.prompt_gateway import get_prompt_gateway",
+      "count": 1
+    },
+    {
+      "path": "application/blueprint/services/chapter_preplanning_service.py",
+      "statement": "from infrastructure.ai.prompt_keys import PLANNING_CHAPTER_PREPLAN",
+      "count": 1
+    },
+    {
+      "path": "application/blueprint/services/chapter_preplanning_service.py",
+      "statement": "from infrastructure.persistence.database.connection import get_database",
+      "count": 1
+    },
+    {
+      "path": "application/blueprint/services/chapter_preplanning_service.py",
+      "statement": "from infrastructure.persistence.database.sqlite_ai_invocation_repository import SqliteVariableHubRepository",
+      "count": 1
+    },
+    {
+      "path": "application/blueprint/services/continuous_planning_service.py",
+      "statement": "from infrastructure.ai.generation_profiles import generation_config_from_profile",
+      "count": 1
+    },
+    {
+      "path": "application/blueprint/services/continuous_planning_service.py",
+      "statement": "from infrastructure.ai.prompt_contract import PromptContract",
+      "count": 1
+    },
+    {
+      "path": "application/blueprint/services/continuous_planning_service.py",
+      "statement": "from infrastructure.ai.prompt_contracts.continuous_planning import CONTINUOUS_PLANNING_NEXT_ACT_CONTRACT, PLANNING_ACT_CONTRACT, PLANNING_PRECISE_MACRO_CONTRACT, PLANNING_PRECISE_REPAIR_CONTRACT, PLANNING_PRECISE_VOLUME_CONTRACT, PLANNING_QUICK_MACRO_CONTRACT",
+      "count": 1
+    },
+    {
+      "path": "application/blueprint/services/continuous_planning_service.py",
+      "statement": "from infrastructure.ai.prompt_gateway import get_prompt_gateway",
+      "count": 1
+    },
+    {
+      "path": "application/blueprint/services/continuous_planning_service.py",
+      "statement": "from infrastructure.ai.prompt_keys import PLANNING_ACT",
+      "count": 1
+    },
+    {
+      "path": "application/blueprint/services/continuous_planning_service.py",
+      "statement": "from infrastructure.persistence.database.chapter_element_repository import ChapterElementRepository",
+      "count": 1
+    },
+    {
+      "path": "application/blueprint/services/continuous_planning_service.py",
+      "statement": "from infrastructure.persistence.database.connection import get_database",
+      "count": 1
+    },
+    {
+      "path": "application/blueprint/services/continuous_planning_service.py",
+      "statement": "from infrastructure.persistence.database.foreshadowing_repository import ForeshadowingRepositoryImpl",
+      "count": 1
+    },
+    {
+      "path": "application/blueprint/services/continuous_planning_service.py",
+      "statement": "from infrastructure.persistence.database.sqlite_ai_invocation_repository import SqliteVariableHubRepository",
+      "count": 1
+    },
+    {
+      "path": "application/blueprint/services/continuous_planning_service.py",
+      "statement": "from infrastructure.persistence.database.story_node_repository import StoryNodeRepository",
+      "count": 1
+    },
+    {
+      "path": "application/blueprint/services/setup_context_builder.py",
+      "statement": "from infrastructure.persistence.database.connection import get_database",
+      "count": 1
+    },
+    {
+      "path": "application/blueprint/services/setup_context_builder.py",
+      "statement": "from infrastructure.persistence.database.sqlite_ai_invocation_repository import SqliteVariableHubRepository",
+      "count": 1
+    },
+    {
+      "path": "application/blueprint/services/setup_main_plot_invocation.py",
+      "statement": "from infrastructure.ai.prompt_keys import PLANNING_MAIN_PLOT_OPTION",
+      "count": 1
+    },
+    {
+      "path": "application/blueprint/services/setup_main_plot_invocation.py",
+      "statement": "from infrastructure.ai.prompt_manager import get_prompt_manager",
+      "count": 1
+    },
+    {
+      "path": "application/blueprint/services/setup_main_plot_invocation.py",
+      "statement": "from infrastructure.ai.prompt_package_sync import force_sync_builtin_prompt_node",
+      "count": 2
+    },
+    {
+      "path": "application/blueprint/services/setup_main_plot_invocation.py",
+      "statement": "from infrastructure.ai.prompt_registry import get_prompt_registry",
+      "count": 1
+    },
+    {
+      "path": "application/blueprint/services/setup_main_plot_invocation.py",
+      "statement": "from infrastructure.persistence.database.connection import get_database",
+      "count": 1
+    },
+    {
+      "path": "application/blueprint/services/setup_main_plot_invocation.py",
+      "statement": "from infrastructure.persistence.database.sqlite_ai_invocation_repository import SqliteInvocationSpecRepository, SqliteVariableHubRepository",
+      "count": 1
+    },
+    {
+      "path": "application/blueprint/services/setup_main_plot_invocation.py",
+      "statement": "from infrastructure.persistence.database.write_dispatch import sqlite_writes_bypass_queue",
+      "count": 1
+    },
+    {
+      "path": "application/blueprint/services/setup_main_plot_suggestion_service.py",
+      "statement": "from infrastructure.ai.prompt_keys import PLANNING_MAIN_PLOT_OPTION",
+      "count": 1
+    },
+    {
+      "path": "application/blueprint/services/setup_main_plot_suggestion_service.py",
+      "statement": "from infrastructure.ai.prompt_registry import get_prompt_registry",
+      "count": 1
+    },
+    {
+      "path": "application/blueprint/services/setup_plot_outline_invocation.py",
+      "statement": "from infrastructure.ai.prompt_keys import PLANNING_PLOT_OUTLINE",
+      "count": 1
+    },
+    {
+      "path": "application/blueprint/services/setup_plot_outline_invocation.py",
+      "statement": "from infrastructure.ai.prompt_manager import get_prompt_manager",
+      "count": 1
+    },
+    {
+      "path": "application/blueprint/services/setup_plot_outline_invocation.py",
+      "statement": "from infrastructure.ai.prompt_package_sync import force_sync_builtin_prompt_node",
+      "count": 2
+    },
+    {
+      "path": "application/blueprint/services/setup_plot_outline_invocation.py",
+      "statement": "from infrastructure.ai.prompt_registry import get_prompt_registry",
+      "count": 1
+    },
+    {
+      "path": "application/blueprint/services/setup_plot_outline_invocation.py",
+      "statement": "from infrastructure.persistence.database.connection import get_database",
+      "count": 1
+    },
+    {
+      "path": "application/blueprint/services/setup_plot_outline_invocation.py",
+      "statement": "from infrastructure.persistence.database.sqlite_ai_invocation_repository import SqliteInvocationSpecRepository, SqliteVariableHubRepository",
+      "count": 1
+    },
+    {
+      "path": "application/blueprint/services/setup_plot_outline_invocation.py",
+      "statement": "from infrastructure.persistence.database.write_dispatch import sqlite_writes_bypass_queue",
+      "count": 1
+    },
+    {
+      "path": "application/blueprint/services/story_structure_service.py",
+      "statement": "from infrastructure.persistence.database.story_node_repository import StoryNodeRepository",
+      "count": 1
+    },
+    {
+      "path": "application/blueprint/services/volume_summary_service.py",
+      "statement": "from infrastructure.ai.generation_profiles import generation_config_from_profile",
+      "count": 1
+    },
+    {
+      "path": "application/blueprint/services/volume_summary_service.py",
+      "statement": "from infrastructure.ai.prompt_contract import PromptContract",
+      "count": 1
+    },
+    {
+      "path": "application/blueprint/services/volume_summary_service.py",
+      "statement": "from infrastructure.ai.prompt_gateway import get_prompt_gateway",
+      "count": 1
+    },
+    {
+      "path": "application/blueprint/services/volume_summary_service.py",
+      "statement": "from infrastructure.ai.prompt_keys import SUMMARY_ACT, SUMMARY_CHECKPOINT, SUMMARY_PART, SUMMARY_VOLUME",
+      "count": 1
+    },
+    {
+      "path": "application/blueprint/services/volume_summary_service.py",
+      "statement": "from infrastructure.persistence.database.story_node_repository import StoryNodeRepository",
+      "count": 1
+    },
+    {
+      "path": "application/character/services/character_narrative_kernel.py",
+      "statement": "from infrastructure.persistence.database.connection import get_database",
+      "count": 1
+    },
+    {
+      "path": "application/cloud/connection_service.py",
+      "statement": "from infrastructure.cloud.session_store import CloudSession, CloudSessionStore",
+      "count": 1
+    },
+    {
+      "path": "application/core/services/export_service.py",
+      "statement": "from infrastructure.export.font_environment import ExportFontEnvironmentSettings",
+      "count": 1
+    },
+    {
+      "path": "application/core/services/novel_service.py",
+      "statement": "from infrastructure.persistence.database.connection import get_database",
+      "count": 2
+    },
+    {
+      "path": "application/core/services/novel_service.py",
+      "statement": "from infrastructure.persistence.database.sqlite_ai_invocation_repository import SqliteVariableHubRepository",
+      "count": 1
+    },
+    {
+      "path": "application/core/services/novel_service.py",
+      "statement": "from infrastructure.persistence.database.sqlite_bible_repository import SqliteBibleRepository",
+      "count": 1
+    },
+    {
+      "path": "application/core/services/novel_service.py",
+      "statement": "from infrastructure.persistence.database.story_node_repository import StoryNodeRepository",
+      "count": 1
+    },
+    {
+      "path": "application/core/services/scene_generation_service.py",
+      "statement": "from infrastructure.ai.chromadb_vector_store import ChromaDBVectorStore",
+      "count": 1
+    },
+    {
+      "path": "application/core/services/scene_generation_service.py",
+      "statement": "from infrastructure.ai.prompt_keys import SCENE_GENERATION",
+      "count": 1
+    },
+    {
+      "path": "application/core/services/scene_generation_service.py",
+      "statement": "from infrastructure.ai.prompt_utils import render_required_prompt",
+      "count": 1
+    },
+    {
+      "path": "application/engine/dag/daemon_runner.py",
+      "statement": "from infrastructure.engine.dag_environment import DAGEnvironmentSettings",
+      "count": 1
+    },
+    {
+      "path": "application/engine/dag/models.py",
+      "statement": "from infrastructure.ai.prompt_keys import validate_key",
+      "count": 2
+    },
+    {
+      "path": "application/engine/dag/nodes/anti_ai_nodes.py",
+      "statement": "from infrastructure.ai.prompt_keys import ANTI_AI_ALLOWLIST_EXPLAIN, ANTI_AI_BEHAVIOR_PROTOCOL, ANTI_AI_CHAPTER_AUDIT, ANTI_AI_CHARACTER_STATE_LOCK, ANTI_AI_FINALE_ENHANCEMENT, ANTI_AI_MID_GENERATION_REFRESH",
+      "count": 1
+    },
+    {
+      "path": "application/engine/dag/nodes/context_nodes.py",
+      "statement": "from infrastructure.ai.prompt_keys import CONTEXT_BLUEPRINT, CONTEXT_DEBT, CONTEXT_FORESHADOW, CONTEXT_MEMORY, VOICE_STYLE_ANALYSIS",
+      "count": 1
+    },
+    {
+      "path": "application/engine/dag/nodes/context_nodes.py",
+      "statement": "from infrastructure.persistence.database.connection import get_database",
+      "count": 3
+    },
+    {
+      "path": "application/engine/dag/nodes/context_nodes.py",
+      "statement": "from infrastructure.persistence.database.sqlite_bible_repository import SqliteBibleRepository",
+      "count": 1
+    },
+    {
+      "path": "application/engine/dag/nodes/context_nodes.py",
+      "statement": "from infrastructure.persistence.database.worldbuilding_repository import WorldbuildingRepository",
+      "count": 1
+    },
+    {
+      "path": "application/engine/dag/nodes/execution_nodes.py",
+      "statement": "from infrastructure.ai.prompt_keys import ANTI_AI_ALLOWLIST_EXPLAIN, ANTI_AI_BEHAVIOR_PROTOCOL, ANTI_AI_CHARACTER_STATE_LOCK, AUTOPILOT_STREAM_BEAT as _WORKFLOW_BEAT_NODE_KEY, CHAPTER_GENERATION_MAIN as _WORKFLOW_CHAPTER_GEN_NODE_KEY, MACRO_PLANNING, SCENE_DIRECTOR",
+      "count": 1
+    },
+    {
+      "path": "application/engine/dag/nodes/execution_nodes.py",
+      "statement": "from infrastructure.persistence.database.connection import get_database",
+      "count": 1
+    },
+    {
+      "path": "application/engine/dag/nodes/ext_supplement_nodes.py",
+      "statement": "from infrastructure.ai.prompt_keys import CHAPTER_NARRATIVE_SYNC, CHAPTER_STATE_EXTRACTION, STYLE_ANALYSIS, SUMMARY_ACT, SUMMARY_CHECKPOINT, SUMMARY_PART, SUMMARY_VOLUME",
+      "count": 1
+    },
+    {
+      "path": "application/engine/dag/nodes/gateway_nodes.py",
+      "statement": "from infrastructure.ai.prompt_keys import CIRCUIT_BREAKER, CONDITION_GATEWAY, RETRY_GATEWAY, REVIEW_GATEWAY",
+      "count": 1
+    },
+    {
+      "path": "application/engine/dag/nodes/gen_supplement_nodes.py",
+      "statement": "from infrastructure.ai.prompt_keys import CHAPTER_GENERATION_BASIC, DIALOGUE_GENERATION, SCENE_GENERATION",
+      "count": 1
+    },
+    {
+      "path": "application/engine/dag/nodes/planning_chapter_outline_node.py",
+      "statement": "from infrastructure.ai.prompt_keys import OUTLINE_BEAT_PARTITION",
+      "count": 1
+    },
+    {
+      "path": "application/engine/dag/nodes/planning_nodes.py",
+      "statement": "from infrastructure.ai.prompt_keys import BEAT_SHEET_DECOMPOSITION, PLANNING_ACT, PLANNING_QUICK_MACRO",
+      "count": 1
+    },
+    {
+      "path": "application/engine/dag/nodes/review_nodes.py",
+      "statement": "from infrastructure.ai.prompt_keys import REVIEW_CHARACTER_CONSISTENCY, REVIEW_FORESHADOWING_USAGE, REVIEW_IMPROVEMENT_SUGGESTIONS, REVIEW_STORYLINE_CONSISTENCY, REVIEW_TIMELINE_CONSISTENCY",
+      "count": 1
+    },
+    {
+      "path": "application/engine/dag/nodes/validation_nodes.py",
+      "statement": "from infrastructure.ai.prompt_keys import CHAPTER_AFTERMATH, CLICHE_SCAN, FORESHADOW_CHECK, KG_INFERENCE, TENSION_SCORING, VOICE_DRIFT",
+      "count": 1
+    },
+    {
+      "path": "application/engine/dag/nodes/validation_nodes.py",
+      "statement": "from infrastructure.persistence.database.connection import get_database",
+      "count": 1
+    },
+    {
+      "path": "application/engine/dag/nodes/world_nodes.py",
+      "statement": "from infrastructure.ai.prompt_keys import BIBLE_ALL, BIBLE_CHARACTERS, BIBLE_LOCATIONS, BIBLE_WORLDBUILDING",
+      "count": 1
+    },
+    {
+      "path": "application/engine/dag/plan/outline_beat_planner.py",
+      "statement": "from infrastructure.ai.prompt_keys import OUTLINE_BEAT_PARTITION",
+      "count": 1
+    },
+    {
+      "path": "application/engine/dag/plan/outline_beat_planner.py",
+      "statement": "from infrastructure.ai.prompt_manager import get_prompt_manager",
+      "count": 1
+    },
+    {
+      "path": "application/engine/dag/plan/outline_beat_planner.py",
+      "statement": "from infrastructure.ai.prompt_registry import get_prompt_registry",
+      "count": 1
+    },
+    {
+      "path": "application/engine/dag/registry.py",
+      "statement": "from infrastructure.ai.prompt_registry import get_prompt_registry",
+      "count": 2
+    },
+    {
+      "path": "application/engine/dag/version_manager.py",
+      "statement": "from infrastructure.persistence.database.connection import get_database",
+      "count": 1
+    },
+    {
+      "path": "application/engine/dag/version_manager.py",
+      "statement": "from infrastructure.persistence.database.sqlite_dag_version_repository import SqliteDAGVersionRepository",
+      "count": 1
+    },
+    {
+      "path": "application/engine/services/autopilot_recovery_policy.py",
+      "statement": "from infrastructure.engine.story_pipeline_environment import StoryPipelineEnvironmentSettings",
+      "count": 1
+    },
+    {
+      "path": "application/engine/services/autopilot_recovery_policy.py",
+      "statement": "from infrastructure.persistence.database.chapter_draft_repository import ChapterDraftRepository",
+      "count": 1
+    },
+    {
+      "path": "application/engine/services/autopilot_recovery_policy.py",
+      "statement": "from infrastructure.persistence.database.connection import get_database",
+      "count": 1
+    },
+    {
+      "path": "application/engine/services/beat_cot_bridge.py",
+      "statement": "from infrastructure.ai.prompt_keys import BEAT_COT_BRIDGE",
+      "count": 1
+    },
+    {
+      "path": "application/engine/services/chapter_aftermath_pipeline.py",
+      "statement": "from infrastructure.persistence.database.chapter_element_repository import ChapterElementRepository",
+      "count": 1
+    },
+    {
+      "path": "application/engine/services/chapter_aftermath_pipeline.py",
+      "statement": "from infrastructure.persistence.database.chapter_guardrail_snapshot_repository import ChapterGuardrailSnapshotRepository",
+      "count": 1
+    },
+    {
+      "path": "application/engine/services/chapter_aftermath_pipeline.py",
+      "statement": "from infrastructure.persistence.database.connection import get_database",
+      "count": 3
+    },
+    {
+      "path": "application/engine/services/chapter_aftermath_pipeline.py",
+      "statement": "from infrastructure.persistence.database.sqlite_governance_repository import SqliteGovernanceRepository",
+      "count": 1
+    },
+    {
+      "path": "application/engine/services/chapter_aftermath_pipeline.py",
+      "statement": "from infrastructure.persistence.database.sqlite_knowledge_repository import SqliteKnowledgeRepository",
+      "count": 1
+    },
+    {
+      "path": "application/engine/services/chapter_aftermath_pipeline.py",
+      "statement": "from infrastructure.persistence.database.sqlite_storyline_repository import SqliteStorylineRepository",
+      "count": 1
+    },
+    {
+      "path": "application/engine/services/chapter_aftermath_pipeline.py",
+      "statement": "from infrastructure.persistence.database.story_node_repository import StoryNodeRepository",
+      "count": 1
+    },
+    {
+      "path": "application/engine/services/chapter_aftermath_pipeline.py",
+      "statement": "from infrastructure.persistence.database.triple_repository import TripleRepository",
+      "count": 1
+    },
+    {
+      "path": "application/engine/services/chapter_bridge_service.py",
+      "statement": "from infrastructure.ai.prompt_keys import CHAPTER_BRIDGE_EXTRACT as _BRIDGE_EXTRACT_NODE_KEY, CHAPTER_BRIDGE_CHECK as _BRIDGE_CHECK_NODE_KEY, CHAPTER_BRIDGE_FIX as _BRIDGE_FIX_NODE_KEY",
+      "count": 1
+    },
+    {
+      "path": "application/engine/services/chapter_bridge_service.py",
+      "statement": "from infrastructure.ai.prompt_utils import PromptTemplateUnavailable, render_required_prompt",
+      "count": 1
+    },
+    {
+      "path": "application/engine/services/chapter_bridge_service.py",
+      "statement": "from infrastructure.persistence.database.connection import get_database",
+      "count": 3
+    },
+    {
+      "path": "application/engine/services/context_assembler.py",
+      "statement": "from infrastructure.persistence.database.story_node_repository import StoryNodeRepository",
+      "count": 1
+    },
+    {
+      "path": "application/engine/services/context_brief.py",
+      "statement": "from infrastructure.persistence.database.connection import DatabaseConnection",
+      "count": 1
+    },
+    {
+      "path": "application/engine/services/context_budget_allocator.py",
+      "statement": "from infrastructure.ai.prompt_keys import LIFECYCLE_PHASE_DIRECTIVES as _LIFECYCLE_PROMPT_ID",
+      "count": 1
+    },
+    {
+      "path": "application/engine/services/context_budget_allocator.py",
+      "statement": "from infrastructure.ai.prompt_registry import get_prompt_registry",
+      "count": 1
+    },
+    {
+      "path": "application/engine/services/context_budget_allocator.py",
+      "statement": "from infrastructure.persistence.database.connection import get_database",
+      "count": 2
+    },
+    {
+      "path": "application/engine/services/context_budget_allocator.py",
+      "statement": "from infrastructure.persistence.database.sqlite_character_state_repository import SqliteCharacterStateRepository",
+      "count": 1
+    },
+    {
+      "path": "application/engine/services/context_budget_allocator.py",
+      "statement": "from infrastructure.persistence.database.sqlite_memory_repository import SqliteNarrativeMemoryRepository",
+      "count": 1
+    },
+    {
+      "path": "application/engine/services/context_budget_allocator.py",
+      "statement": "from infrastructure.persistence.database.sqlite_narrative_debt_repository import SqliteNarrativeDebtRepository",
+      "count": 1
+    },
+    {
+      "path": "application/engine/services/context_budget_allocator.py",
+      "statement": "from infrastructure.persistence.database.story_node_repository import StoryNodeRepository",
+      "count": 1
+    },
+    {
+      "path": "application/engine/services/context_budget_allocator.py",
+      "statement": "from infrastructure.persistence.database.worldbuilding_repository import WorldbuildingRepository",
+      "count": 1
+    },
+    {
+      "path": "application/engine/services/context_builder.py",
+      "statement": "from infrastructure.ai.prompt_keys import BEAT_FOCUS_INSTRUCTIONS as _BEAT_PROMPT_ID",
+      "count": 1
+    },
+    {
+      "path": "application/engine/services/context_builder.py",
+      "statement": "from infrastructure.ai.prompt_registry import get_prompt_registry",
+      "count": 2
+    },
+    {
+      "path": "application/engine/services/context_builder.py",
+      "statement": "from infrastructure.persistence.database.connection import get_database",
+      "count": 1
+    },
+    {
+      "path": "application/engine/services/context_slot_providers.py",
+      "statement": "from infrastructure.persistence.database.sqlite_pragmas import apply_standard_pragmas, get_sqlite_pragma_settings",
+      "count": 1
+    },
+    {
+      "path": "application/engine/services/draft_aof.py",
+      "statement": "from infrastructure.persistence.database.connection import get_database",
+      "count": 2
+    },
+    {
+      "path": "application/engine/services/draft_aof.py",
+      "statement": "from infrastructure.persistence.database.sqlite_chapter_repository import SqliteChapterRepository",
+      "count": 1
+    },
+    {
+      "path": "application/engine/services/draft_aof.py",
+      "statement": "from infrastructure.persistence.database.story_node_repository import StoryNodeRepository",
+      "count": 1
+    },
+    {
+      "path": "application/engine/services/memory_engine.py",
+      "statement": "from infrastructure.ai.generation_profiles import generation_config_from_profile",
+      "count": 1
+    },
+    {
+      "path": "application/engine/services/memory_engine.py",
+      "statement": "from infrastructure.ai.prompt_contracts.memory_extraction import MEMORY_EXTRACTION_CONTRACT",
+      "count": 1
+    },
+    {
+      "path": "application/engine/services/memory_engine.py",
+      "statement": "from infrastructure.ai.prompt_gateway import PromptGatewayError, get_prompt_gateway",
+      "count": 1
+    },
+    {
+      "path": "application/engine/services/novel_stop_signal.py",
+      "statement": "from infrastructure.persistence.database.connection import get_database",
+      "count": 1
+    },
+    {
+      "path": "application/engine/services/persistence_queue.py",
+      "statement": "from infrastructure.persistence.database.connection import get_database",
+      "count": 11
+    },
+    {
+      "path": "application/engine/services/persistence_queue.py",
+      "statement": "from infrastructure.persistence.database.sqlite_chapter_repository import SqliteChapterRepository",
+      "count": 1
+    },
+    {
+      "path": "application/engine/services/persistence_queue.py",
+      "statement": "from infrastructure.persistence.database.sqlite_storyline_repository import SqliteStorylineRepository",
+      "count": 1
+    },
+    {
+      "path": "application/engine/services/persistence_queue.py",
+      "statement": "from infrastructure.persistence.database.write_dispatch import clear_sqlite_writer_thread",
+      "count": 1
+    },
+    {
+      "path": "application/engine/services/persistence_queue.py",
+      "statement": "from infrastructure.persistence.database.write_dispatch import register_sqlite_writer_thread",
+      "count": 1
+    },
+    {
+      "path": "application/engine/services/persistence_queue_adapter.py",
+      "statement": "from infrastructure.persistence.database.connection import get_connection_pool",
+      "count": 1
+    },
+    {
+      "path": "application/engine/services/persistence_queue_v2.py",
+      "statement": "from infrastructure.persistence.database.sqlite_pragmas import apply_standard_pragmas",
+      "count": 1
+    },
+    {
+      "path": "application/engine/services/query_service.py",
+      "statement": "from infrastructure.persistence.database.connection import get_database",
+      "count": 2
+    },
+    {
+      "path": "application/engine/services/scene_director_service.py",
+      "statement": "from infrastructure.ai.llm_environment import LLMEnvironmentSettings",
+      "count": 1
+    },
+    {
+      "path": "application/engine/services/scene_director_service.py",
+      "statement": "from infrastructure.ai.prompt_keys import SCENE_DIRECTOR as _SCENE_DIRECTOR_NODE_KEY",
+      "count": 1
+    },
+    {
+      "path": "application/engine/services/scene_director_service.py",
+      "statement": "from infrastructure.ai.prompt_utils import render_required_prompt",
+      "count": 1
+    },
+    {
+      "path": "application/engine/services/state_bootstrap.py",
+      "statement": "from infrastructure.persistence.database.connection import get_database",
+      "count": 9
+    },
+    {
+      "path": "application/engine/services/state_bootstrap.py",
+      "statement": "from infrastructure.persistence.database.sqlite_bible_repository import SqliteBibleRepository",
+      "count": 1
+    },
+    {
+      "path": "application/engine/services/state_bootstrap.py",
+      "statement": "from infrastructure.persistence.database.sqlite_chapter_repository import SqliteChapterRepository",
+      "count": 1
+    },
+    {
+      "path": "application/engine/services/state_bootstrap.py",
+      "statement": "from infrastructure.persistence.database.sqlite_plot_arc_repository import SqlitePlotArcRepository",
+      "count": 1
+    },
+    {
+      "path": "application/engine/services/state_bootstrap.py",
+      "statement": "from infrastructure.persistence.database.sqlite_storyline_repository import SqliteStorylineRepository",
+      "count": 1
+    },
+    {
+      "path": "application/engine/services/state_bootstrap.py",
+      "statement": "from infrastructure.persistence.database.triple_repository import TripleRepository",
+      "count": 1
+    },
+    {
+      "path": "application/engine/services/state_snapshot_manager.py",
+      "statement": "from infrastructure.persistence.database.connection import get_database",
+      "count": 3
+    },
+    {
+      "path": "application/engine/services/state_snapshot_manager.py",
+      "statement": "from infrastructure.persistence.database.sqlite_pragmas import apply_standard_pragmas, get_sqlite_pragma_settings",
+      "count": 1
+    },
+    {
+      "path": "application/engine/services/streaming_bus.py",
+      "statement": "from infrastructure.engine.streaming_environment import StreamingEnvironmentSettings",
+      "count": 1
+    },
+    {
+      "path": "application/engine/theme/theme_agent.py",
+      "statement": "from infrastructure.ai.prompt_registry import get_prompt_registry",
+      "count": 1
+    },
+    {
+      "path": "application/manuscript/reindex_job.py",
+      "statement": "from infrastructure.persistence.database.connection import get_database",
+      "count": 1
+    },
+    {
+      "path": "application/manuscript/reindex_job.py",
+      "statement": "from infrastructure.persistence.database.manuscript_entity_repository import ManuscriptEntityRepository",
+      "count": 1
+    },
+    {
+      "path": "application/manuscript/reindex_job.py",
+      "statement": "from infrastructure.persistence.database.sqlite_bible_repository import SqliteBibleRepository",
+      "count": 1
+    },
+    {
+      "path": "application/manuscript/reindex_job.py",
+      "statement": "from infrastructure.persistence.database.unified_character_repository import SqliteUnifiedCharacterRepository",
+      "count": 1
+    },
+    {
+      "path": "application/manuscript/reindex_job.py",
+      "statement": "from infrastructure.persistence.database.unified_prop_repository import SqliteUnifiedPropRepository",
+      "count": 1
+    },
+    {
+      "path": "application/narrative_engine/story_phase_resolution.py",
+      "statement": "from infrastructure.persistence.database.connection import get_database",
+      "count": 2
+    },
+    {
+      "path": "application/narrative_engine/story_phase_resolution.py",
+      "statement": "from infrastructure.persistence.database.sqlite_chapter_repository import SqliteChapterRepository",
+      "count": 2
+    },
+    {
+      "path": "application/narrative_engine/story_phase_resolution.py",
+      "statement": "from infrastructure.persistence.database.sqlite_novel_repository import SqliteNovelRepository",
+      "count": 1
+    },
+    {
+      "path": "application/narrative_engine/story_phase_resolution.py",
+      "statement": "from infrastructure.persistence.database.story_node_repository import StoryNodeRepository",
+      "count": 1
+    },
+    {
+      "path": "application/novel/chapter_renumber/coordinator.py",
+      "statement": "from infrastructure.persistence.database.connection import DatabaseConnection",
+      "count": 1
+    },
+    {
+      "path": "application/paths.py",
+      "statement": "from infrastructure.runtime.data_directory_environment import DataDirectoryEnvironmentSettings, LEGACY_PROD_DATA_DIR_ENV, PLOTPILOT_PROD_DATA_DIR_ENV, TAURI_APP_IDENTIFIER",
+      "count": 1
+    },
+    {
+      "path": "application/prop/extractors/llm_extractor.py",
+      "statement": "from infrastructure.ai.prompt_keys import PROP_EVENT_EXTRACTION",
+      "count": 1
+    },
+    {
+      "path": "application/prop/extractors/llm_extractor.py",
+      "statement": "from infrastructure.ai.prompt_utils import render_required_prompt",
+      "count": 1
+    },
+    {
+      "path": "application/snapshot/services/snapshot_service.py",
+      "statement": "from infrastructure.persistence.database.write_dispatch import sqlite_writes_bypass_queue",
+      "count": 1
+    },
+    {
+      "path": "application/workbench/services/sandbox_dialogue_service.py",
+      "statement": "from infrastructure.ai.prompt_keys import DIALOGUE_GENERATION",
+      "count": 1
+    },
+    {
+      "path": "application/workbench/services/sandbox_dialogue_service.py",
+      "statement": "from infrastructure.ai.prompt_registry import get_prompt_registry",
+      "count": 1
+    },
+    {
+      "path": "application/workbench/services/sandbox_dialogue_service.py",
+      "statement": "from infrastructure.ai.prompt_utils import render_required_prompt",
+      "count": 1
+    },
+    {
+      "path": "application/workflows/auto_novel_generation_workflow.py",
+      "statement": "from infrastructure.ai.prompt_contracts.prose_from_script import PROSE_FROM_SCRIPT_CONTRACT",
+      "count": 1
+    },
+    {
+      "path": "application/workflows/auto_novel_generation_workflow.py",
+      "statement": "from infrastructure.ai.prompt_contracts.script_generation import SCRIPT_GENERATION_CONTRACT",
+      "count": 1
+    },
+    {
+      "path": "application/workflows/auto_novel_generation_workflow.py",
+      "statement": "from infrastructure.ai.prompt_gateway import get_prompt_gateway",
+      "count": 1
+    },
+    {
+      "path": "application/workflows/auto_novel_generation_workflow.py",
+      "statement": "from infrastructure.ai.prompt_keys import CHAPTER_GENERATION_MAIN as _WORKFLOW_CHAPTER_GEN_NODE_KEY",
+      "count": 1
+    },
+    {
+      "path": "application/workflows/auto_novel_generation_workflow.py",
+      "statement": "from infrastructure.ai.prompt_keys import PROSE_FROM_SCRIPT as _PROSE_FROM_SCRIPT_NODE_KEY",
+      "count": 1
+    },
+    {
+      "path": "application/workflows/auto_novel_generation_workflow.py",
+      "statement": "from infrastructure.ai.prompt_keys import SCRIPT_GENERATION as _SCRIPT_GEN_NODE_KEY",
+      "count": 1
+    },
+    {
+      "path": "application/workflows/auto_novel_generation_workflow.py",
+      "statement": "from infrastructure.ai.prompt_utils import get_required_prompt_system, get_required_prompt_user_template",
+      "count": 1
+    },
+    {
+      "path": "application/workflows/auto_novel_generation_workflow.py",
+      "statement": "from infrastructure.ai.provider_factory import LLMProviderFactory",
+      "count": 1
+    },
+    {
+      "path": "application/workflows/auto_novel_generation_workflow.py",
+      "statement": "from infrastructure.persistence.database.connection import get_database",
+      "count": 1
+    },
+    {
+      "path": "application/world/services/auto_bible_generator.py",
+      "statement": "from infrastructure.ai.prompt_keys import BIBLE_ALL, BIBLE_WORLDBUILDING, BIBLE_CHARACTERS, BIBLE_LOCATIONS, BIBLE_STYLE_CONVENTION",
+      "count": 1
+    },
+    {
+      "path": "application/world/services/auto_bible_generator.py",
+      "statement": "from infrastructure.ai.prompt_keys import BIBLE_STYLE_CONVENTION",
+      "count": 1
+    },
+    {
+      "path": "application/world/services/auto_bible_generator.py",
+      "statement": "from infrastructure.ai.prompt_registry import get_prompt_registry",
+      "count": 3
+    },
+    {
+      "path": "application/world/services/auto_bible_generator.py",
+      "statement": "from infrastructure.persistence.database.triple_repository import TripleRepository",
+      "count": 1
+    },
+    {
+      "path": "application/world/services/auto_knowledge_generator.py",
+      "statement": "from infrastructure.ai.prompt_keys import KNOWLEDGE_INITIAL",
+      "count": 1
+    },
+    {
+      "path": "application/world/services/auto_knowledge_generator.py",
+      "statement": "from infrastructure.ai.prompt_utils import render_required_prompt",
+      "count": 1
+    },
+    {
+      "path": "application/world/services/bible_location_triple_sync.py",
+      "statement": "from infrastructure.persistence.database.triple_repository import BIBLE_ANCHOR_PREDICATE, TripleRepository",
+      "count": 1
+    },
+    {
+      "path": "application/world/services/bible_service.py",
+      "statement": "from infrastructure.persistence.database.story_node_repository import StoryNodeRepository",
+      "count": 1
+    },
+    {
+      "path": "application/world/services/bible_setup_continuation.py",
+      "statement": "from infrastructure.persistence.database.connection import get_database",
+      "count": 1
+    },
+    {
+      "path": "application/world/services/bible_setup_continuation.py",
+      "statement": "from infrastructure.persistence.database.sqlite_bible_repository import SqliteBibleRepository",
+      "count": 1
+    },
+    {
+      "path": "application/world/services/bible_setup_continuation.py",
+      "statement": "from infrastructure.persistence.database.sqlite_chapter_repository import SqliteChapterRepository",
+      "count": 1
+    },
+    {
+      "path": "application/world/services/bible_setup_continuation.py",
+      "statement": "from infrastructure.persistence.database.sqlite_novel_repository import SqliteNovelRepository",
+      "count": 1
+    },
+    {
+      "path": "application/world/services/bible_setup_continuation.py",
+      "statement": "from infrastructure.persistence.database.triple_repository import TripleRepository",
+      "count": 1
+    },
+    {
+      "path": "application/world/services/bible_setup_continuation.py",
+      "statement": "from infrastructure.persistence.database.unified_character_repository import SqliteUnifiedCharacterRepository",
+      "count": 1
+    },
+    {
+      "path": "application/world/services/bible_setup_continuation.py",
+      "statement": "from infrastructure.persistence.database.worldbuilding_repository import WorldbuildingRepository",
+      "count": 1
+    },
+    {
+      "path": "application/world/services/bible_setup_invocation.py",
+      "statement": "from infrastructure.ai.prompt_keys import BIBLE_CHARACTERS, BIBLE_LOCATIONS, BIBLE_WORLDBUILDING",
+      "count": 1
+    },
+    {
+      "path": "application/world/services/bible_setup_invocation.py",
+      "statement": "from infrastructure.ai.prompt_manager import get_prompt_manager",
+      "count": 1
+    },
+    {
+      "path": "application/world/services/bible_setup_invocation.py",
+      "statement": "from infrastructure.ai.prompt_package_sync import force_sync_builtin_prompt_node",
+      "count": 2
+    },
+    {
+      "path": "application/world/services/bible_setup_invocation.py",
+      "statement": "from infrastructure.ai.prompt_registry import get_prompt_registry",
+      "count": 1
+    },
+    {
+      "path": "application/world/services/bible_setup_invocation.py",
+      "statement": "from infrastructure.persistence.database.connection import get_database",
+      "count": 1
+    },
+    {
+      "path": "application/world/services/bible_setup_invocation.py",
+      "statement": "from infrastructure.persistence.database.sqlite_ai_invocation_repository import SqliteInvocationSpecRepository, SqliteVariableHubRepository",
+      "count": 1
+    },
+    {
+      "path": "application/world/services/bible_setup_invocation.py",
+      "statement": "from infrastructure.persistence.database.write_dispatch import sqlite_writes_bypass_queue",
+      "count": 1
+    },
+    {
+      "path": "application/world/services/bible_setup_output_bindings.py",
+      "statement": "from infrastructure.ai.prompt_keys import BIBLE_CHARACTERS, BIBLE_LOCATIONS, BIBLE_WORLDBUILDING",
+      "count": 1
+    },
+    {
+      "path": "application/world/services/chapter_narrative_sync.py",
+      "statement": "from infrastructure.ai.prompt_keys import CHAPTER_NARRATIVE_SYNC",
+      "count": 1
+    },
+    {
+      "path": "application/world/services/chapter_narrative_sync.py",
+      "statement": "from infrastructure.ai.prompt_utils import render_required_prompt",
+      "count": 1
+    },
+    {
+      "path": "application/world/services/chapter_narrative_sync.py",
+      "statement": "from infrastructure.persistence.database.connection import get_database",
+      "count": 4
+    },
+    {
+      "path": "application/world/services/chapter_narrative_sync.py",
+      "statement": "from infrastructure.persistence.database.sqlite_memory_repository import SqliteNarrativeMemoryRepository",
+      "count": 1
+    },
+    {
+      "path": "application/world/services/chapter_narrative_sync.py",
+      "statement": "from infrastructure.persistence.database.story_node_repository import StoryNodeRepository",
+      "count": 1
+    },
+    {
+      "path": "application/world/services/knowledge_graph_service.py",
+      "statement": "from infrastructure.persistence.database.chapter_element_repository import ChapterElementRepository",
+      "count": 1
+    },
+    {
+      "path": "application/world/services/knowledge_graph_service.py",
+      "statement": "from infrastructure.persistence.database.story_node_repository import StoryNodeRepository",
+      "count": 1
+    },
+    {
+      "path": "application/world/services/knowledge_graph_service.py",
+      "statement": "from infrastructure.persistence.database.triple_repository import TripleRepository",
+      "count": 1
+    },
+    {
+      "path": "application/world/services/knowledge_service.py",
+      "statement": "from infrastructure.persistence.database.triple_repository import TripleRepository",
+      "count": 1
+    },
+    {
+      "path": "application/world/services/worldbuilding_service.py",
+      "statement": "from infrastructure.persistence.database.worldbuilding_repository import WorldbuildingRepository",
+      "count": 1
+    },
+    {
+      "path": "application/world/services/worldbuilding_stream_parser.py",
+      "statement": "from infrastructure.json_stream.incremental_extractor import JsonStreamBuffer, find_key_object_brace_start, scan_balanced_brace_end, try_parse_json_object",
+      "count": 1
+    }
+  ]
+}

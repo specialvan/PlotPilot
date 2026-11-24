@@ -80,7 +80,7 @@ class DependencyVisitor(ast.NodeVisitor):
 
 def analyze() -> dict:
     result = subprocess.run(
-        ["git", "ls-files", "-z", "--", "*.py"],
+        ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z", "--", "*.py"],
         cwd=REPO_ROOT,
         check=True,
         capture_output=True,
@@ -88,9 +88,11 @@ def analyze() -> dict:
     imports: list[dict] = []
     bypass_calls: list[dict] = []
     files: list[dict] = []
-    for entry in sorted(part for part in result.stdout.split(b"\0") if part):
+    for entry in sorted({part for part in result.stdout.split(b"\0") if part}):
         path = entry.decode("utf-8")
         if path.split("/")[0] not in LAYERS:
+            continue
+        if not (REPO_ROOT / path).is_file():
             continue
         source = (REPO_ROOT / path).read_text(encoding="utf-8-sig")
         tree = ast.parse(source, filename=path)
@@ -135,19 +137,40 @@ def analyze() -> dict:
     }
 
 
+def baseline_additions(result: dict, baseline: dict) -> list[dict]:
+    """Freeze each file/statement's multiplicity; removals cannot buy additions."""
+    allowed = Counter({(item["path"], item["statement"]): item["count"] for item in baseline["imports"]})
+    current = Counter(
+        (item["path"], item["statement"]) for item in result["imports"]
+        if item["source_layer"] == baseline["source_layer"] and item["target_layer"] == baseline["target_layer"]
+    )
+    return [{"path": path, "statement": statement, "count": count}
+            for (path, statement), count in sorted((current - allowed).items())]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--json", action="store_true", help="Include every reference and source line.")
+    parser.add_argument("--check-baseline", type=Path, help="Reject imports added beyond a checked-in baseline.")
     args = parser.parse_args()
     try:
         result = analyze()
+        if args.check_baseline:
+            baseline = json.loads(args.check_baseline.read_text(encoding="utf-8"))
+            additions = baseline_additions(result, baseline)
+            if additions:
+                for item in additions:
+                    print(f"New dependency ({item['count']}): {item['path']}: {item['statement']}", file=sys.stderr)
+                return 1
+            print(f"Dependency baseline passed ({baseline['total_statements']} legacy statements allowed; no additions).")
+            return 0
     except (OSError, UnicodeError, SyntaxError, subprocess.CalledProcessError) as exc:
         print(f"Architecture scan failed: {exc}", file=sys.stderr)
         return 1
     if args.json:
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
-    print(f"Scanned {result['tracked_python_files']} tracked Python files; source references only.")
+    print(f"Scanned {result['tracked_python_files']} Python files (tracked and untracked); source references only.")
     print("| From | To | Import statements | In functions | TYPE_CHECKING |")
     print("| --- | --- | ---: | ---: | ---: |")
     for edge in result["edges"]:

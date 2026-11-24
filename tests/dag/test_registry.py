@@ -9,8 +9,17 @@ class TestNodeRegistry:
 
     def setup_method(self):
         """每个测试前清理注册表"""
+        NodeRegistry.ensure_builtins_loaded()
+        self._saved_registry = NodeRegistry._registry.copy()
+        self._saved_meta = NodeRegistry._meta_registry.copy()
         NodeRegistry._registry.clear()
         NodeRegistry._meta_registry.clear()
+
+    def teardown_method(self):
+        NodeRegistry._registry.clear()
+        NodeRegistry._registry.update(self._saved_registry)
+        NodeRegistry._meta_registry.clear()
+        NodeRegistry._meta_registry.update(self._saved_meta)
 
     def test_register_node(self):
         @NodeRegistry.register("test_node_a")

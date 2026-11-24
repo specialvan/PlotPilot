@@ -2,7 +2,7 @@
 
 这份文档记录 PlotPilot 在当前代码状态下已经落地的机制、兼容层留下的分叉、测试可以证明的边界，以及迁移到写文工作台时应该保留或重做的部分。文档以源码和测试为准，目标设计与实际运行路径分开记录。
 
-最近复核日期为 2026-11-24，源码基线为 `26a85949`。本次根据 Claude 评审包 `review-plotpilot-architecture-analysis.zip` 的 `src/data.ts` 重新检查依赖、写入门禁、幂等性和 CI；评审意见经过源码与局部实验核验后才纳入。下述生产问题尚未修复，文档更新不代表整改完成。
+最近复核日期为 2026-11-25。初轮以 `26a85949` 为源码基线，根据 Claude 评审包 `review-plotpilot-architecture-analysis.zip` 的 `src/data.ts` 核验依赖、写入门禁、幂等性和 CI。随后整改已实现 bypass 上下文隔离、采纳提交持久化、DAG 规则统一、独立 daemon 冒烟、默认回环监听与依赖增量门禁。第 2 节保留历史测量，第 13 节区分历史实验与整改验证；剩余边界见第 12 节。
 
 ## 1. 结论摘要
 
@@ -12,10 +12,10 @@ PlotPilot 已经形成一个面向长篇创作的生产系统，组合了小说�
 2. **AI 调用控制平面**。提示词版本、变量快照、调用会话、生成尝试、采纳决策和提交结果被拆开管理，支持人工审阅和自动驾驶暂停。
 3. **预算化上下文装配**。上下文按 T0 到 T3 分层，在总预算、最低保障和阶段指令下裁剪。
 4. **章后反馈闭环**。章节保存后会把正文转成桥接资产、叙事同步、向量、伏笔、三元组、因果边、人物状态和叙事债务，供下一章继续使用。
-5. **跨进程写入调度与投影状态**。经过统一连接层的常规 SQLite 写入进入队列，由 API 进程中的消费者线程提交；全局 bypass 和独立连接仍能绕开门禁。运行时状态通过共享状态、状态 API 和 SSE 投影给前端。
+5. **跨进程写入调度与投影状态**。经过统一连接层的常规 SQLite 写入进入队列，由宿主进程中的消费者线程提交；采纳提交支持确认响应，显式 bypass 和独立连接仍需审计。运行时状态通过共享状态、状态 API 和 SSE 投影给前端。
 6. **可替换的题材管线和节点注册表**。基础管线提供默认步骤，题材管线覆写少量步骤，DAG 节点通过注册表和元数据接入。
 
-迁移前应先处理三类边界：全局 bypass 与独立连接破坏单写者约束，Invocation 副作用与持久化去重没有完整闭环，业务层直接依赖具体基础设施和 API 工厂。生产路径也仍有兼容分叉：`EngineDaemon` 是推荐入口，同时保留 `legacy_writing_delegate`、旧 `AutopilotDaemon`、`AutoNovelGenerationWorkflow` 和 StoryPipeline。迁移时应先确认许可证适用范围，抽取稳定协议，再减少旧路径。
+迁移前应继续处理三类边界：显式 bypass 与独立连接仍在门禁之外，非 SQLite 副作用需要各自的幂等或补偿协议，业务层仍直接依赖具体基础设施和 API 工厂。生产路径也仍有兼容分叉：`EngineDaemon` 是推荐入口，同时保留 `legacy_writing_delegate`、旧 `AutopilotDaemon`、`AutoNovelGenerationWorkflow` 和 StoryPipeline。迁移时应先确认许可证适用范围，抽取稳定协议，再减少旧路径。
 
 ## 2. 实际架构地图
 
@@ -45,7 +45,7 @@ FastAPI / 工作台请求
 
 ### 2.1 职责与实际依赖
 
-上表描述目录职责，并不证明依赖方向符合分层设计。运行 `python scripts/analyze_architecture.py` 可复核以下矩阵；加 `--json` 可查看每条引用的文件、行号、是否位于函数内，以及是否被字面的 `TYPE_CHECKING` 条件保护。
+上表描述目录职责，并不证明依赖方向符合分层设计。以下矩阵保留整改前的测量；运行 `python scripts/analyze_architecture.py` 查看当前值，加 `--json` 可查看每条引用的文件、行号、是否位于函数内，以及是否被字面的 `TYPE_CHECKING` 条件保护。扫描现在也包含尚未提交、未被忽略的 Python 文件。
 
 统计范围为五个后端层中由 Git 跟踪的 829 个 Python 文件。使用标准库 AST，包含多行 import、函数内 import 和类型检查分支；同一条 import 对同一目标层只计一次，排除同层、相对及动态导入。计数表达源码引用，不表达运行次数，也不自动判定违规。
 
@@ -63,7 +63,9 @@ FastAPI / 工作台请求
 - `domain/engine/dag/repositories/dag_version_repository.py` 导入 application 的 `DAGDefinition`，`domain/novel/value_objects/story_phase.py` 从 engine 重导出 `StoryPhase`，均为真实的外向依赖，需要移动共享契约或消除兼容重导出。
 - `infrastructure → application` 的 21 条引用不能全部算作违规：基础设施实现应用层端口、转换 DTO 可以符合依赖倒置。引用 `application.engine.services.persistence_queue` 或配置服务则涉及运行时与配置耦合，应逐条分类。
 
-Claude 评审中的 342、20、37 等数字与本次 AST 口径不一致，本文采用脚本结果，不推测差异原因。普通 bypass 在五层内有 34 个直接调用表达式，其中包含启动包装器内部的一次调用；另有 1 个启动包装器调用。`ai_invocation_routes.py` 占普通 bypass 调用的 14 处。这不是 34 条独立运行路径，也不包含通过别名或动态调用的情况。
+Claude 评审中的 342、20、37 等数字与该 AST 口径不一致，本文采用脚本结果，不推测差异原因。整改前普通 bypass 在五层内有 34 个直接调用表达式，其中包含启动包装器内部的一次调用；另有 1 个启动包装器调用。`ai_invocation_routes.py` 原占 14 处，本轮均已改走带确认的 writer 调用。这不是 34 条独立运行路径，也不包含通过别名或动态调用的情况。
+
+`config/architecture_import_baseline.json` 固定 `47959b8e` 的 352 条 application→infrastructure import。`python scripts/analyze_architecture.py --check-baseline config/architecture_import_baseline.json` 按文件、规范化语句和重复次数禁止新增，允许减少；删除旧依赖不会抵消不同的新依赖。门禁已接入后端 CI，现有依赖不要求一次性清零。
 
 ### 2.2 迁移热点和领域不变量
 
@@ -97,7 +99,7 @@ Claude 评审中的 342、20、37 等数字与本次 AST 口径不一致，本�
 
 源码证据见 [`engine_daemon.py`](../engine/runtime/engine_daemon.py)、[`daemon_loop.py`](../engine/runtime/daemon_loop.py)、[`novel_lifecycle.py`](../engine/runtime/novel_lifecycle.py)、[`runner.py`](../engine/runtime/runner.py)。
 
-API 托管路径由 `interfaces/daemon_manager.py` 初始化持久化队列和消费者，再把队列传给子进程；独立脚本 `scripts/start_daemon.py` 没有对应的初始化或注入调用，还直接复用了 API 工厂。因此独立脚本不能仅凭可构造 `EngineDaemon` 就视为经过验证的生产部署路径。第 7 节记录队列未就绪时的局部复现；完整启动、依赖初始化顺序和真实写入仍需隔离数据目录的冒烟验证。
+API 托管路径由 `interfaces/daemon_manager.py` 初始化持久化队列和消费者，再把队列传给子进程。独立脚本 `scripts/start_daemon.py` 现会初始化数据库、注册处理器、启动消费者，在 writer 上完成依赖装配，并按 daemon、消费者、数据库的顺序关闭。第 7 节记录隔离目录中的真实启动、写入和停止验证；脚本仍复用 API 工厂，尚未验证真实 LLM 生成链路。
 
 ### 3.2 Novel 状态机
 
@@ -195,13 +197,13 @@ Variable Hub 负责把变量绑定到 `scope`、`stage`、来源、默认值、�
 
 自动驾驶工厂会为 invocation spec、变量、session、attempt 和 adoption repository 注入 SQLite 实现。`AutopilotInvocationOrchestrator._save_result()` 会把 session、attempt、decision 和 commit 写入对应仓储。
 
-同时，`InvocationSessionService`、`AttemptService`、`AdoptionService` 和 `AdoptionCommitService` 本身仍保存内存字典，自动驾驶工厂创建的是空服务对象。但不能据此断言所有会话在重启后都无法读取：`ai_invocation_routes.py` 的查询和提交入口会直接从 SQLite repository 重建 session、attempt 和 decision。需要分别验证自动驾驶服务与 API 路径的恢复契约。
+`InvocationSessionService`、`AttemptService` 和 `AdoptionService` 仍有内存状态。生产组合根为 `AdoptionCommitService` 注入 SQLite adoption repository；不注入仓储的内存模式供单元测试和工具使用，不提供进程重启恢复保证。API 从 SQLite 重建 session、attempt 和 decision，自动提交则先补齐这些依赖再抢占 commit。
 
-提交幂等的缺口更具体：`AdoptionCommitService.commit()` 只查询实例内的 `_commits_by_key`，随后执行 continuation 等副作用；API 的 `create_commit()` 每次请求都会新建该服务，完成后才 `save_commit()`。因此重复 HTTP 请求也会越过空字典，并不需要等待进程重启。
+生产提交先调用 `repos["adoption"].create_commit()`，按 `(session_id, decision_id)` 唯一键取得原始记录；同一 decision 由本机 OS 文件锁串行执行，锁等待发生在 writer 外，进程退出后由 OS 释放。已成功提交直接返回原结果，并保留会话后续进度。其余提交按步骤记录 running、succeeded、blocked 或 failed，恢复时跳过成功步骤；`save_commit()` 按幂等键更新，始终保留原始 ID。
 
-数据库并非没有防重机制：`ai_adoption_commits` 有 `UNIQUE(idempotency_key)`，repository 也提供先查询旧记录的 `create_commit()`。但上述 API 路径没有在执行副作用前调用它；`save_commit()` 只处理 `ON CONFLICT(id)`，相同幂等键的新 commit ID 还可能在副作用执行后才遭遇唯一键冲突。应先持久化抢占提交、按步骤保存执行结果，并使各 continuation 支持幂等或补偿；唯一键本身不能保证业务副作用只发生一次。
+这些检查点不能自动保证业务副作用只执行一次。continuation 需用稳定 `ContinuationContext.idempotency_key` 实现自身去重，或提供补偿；只有明确声明 `retry_safe=True` 的 handler 才允许中断恢复，否则返回需要补偿的失败结果。正文内容、局部回执、计数和节拍进度已在同一事务保存，章节投影也有事务回执，变量输出以 `source_commit_id` 去重。其他外部文件、向量服务等仍需各自的幂等策略；本机锁不构成网络文件系统或多机部署保证。
 
-迁移前应补齐等待审阅会话的重启恢复、相同 decision 的重复请求、并发提交，以及副作用完成但提交记录尚未保存时崩溃的测试。不能把内存字典去重描述为跨请求或跨进程的幂等承诺。
+API 提交及 Gateway、自动驾驶异步入口把同步 commit 放到工作线程。daemon 子进程使用带响应的队列请求，由拥有 writer 的宿主协调提交，避免在子进程等待不可执行的本地 callback。回归测试覆盖重复 HTTP、并发 HTTP、事件循环响应、两个 spawned 进程请求、真实进程在副作用后退出，以及安全重试与拒绝不安全重试。
 
 源码证据见 [`factory.py`](../application/ai_invocation/autopilot/factory.py)、[`orchestrator.py`](../application/ai_invocation/autopilot/orchestrator.py)、[`ai_invocation_routes.py`](../interfaces/api/v1/engine/ai_invocation_routes.py)、[`sqlite_ai_invocation_repository.py`](../infrastructure/persistence/database/sqlite_ai_invocation_repository.py) 和 [`add_ai_invocation_variable_hub.sql`](../infrastructure/persistence/database/migrations/add_ai_invocation_variable_hub.sql)。
 
@@ -258,15 +260,15 @@ Variable Hub 负责把变量绑定到 `scope`、`stage`、来源、默认值、�
 
 `PersistenceQueue` 支持章节 upsert、小说 patch、通用 SQL、事务批量、章节删除和队列排空。`DaemonHostMixin` 的 `_queue_sql()`、章节 upsert 和小说状态刷新都走统一队列。
 
-`push()` 返回成功只代表命令已进入内存队列，不代表 SQLite 已提交；当前通道没有持久化任务日志和逐命令提交确认。消费者随 API 进程运行，进程崩溃或重建时，在途写入没有可靠重放保证，守护进程的写入可用性也依赖该消费者。应分别设计入队确认、提交确认和重放幂等。
+普通 SQL 的 `push()` 返回成功只代表命令已进入内存队列，不代表 SQLite 已提交，也没有持久化任务日志。新增本进程 writer callback 会等待完成并返回结果或异常；子进程采纳提交则通过响应管道返回持久化结果。callback 不自动重试；排队超时且尚未开始的操作会取消，已开始的操作可能继续完成。进程崩溃仍可能丢失在途普通命令，提交确认与持久化重放是不同保证。
 
 ### 7.2 例外边界
 
-启动早期迁移、测试初始化和需要写后立即读的交互路径使用 `sqlite_writes_bypass_queue()`，Invocation 合约注册、自动驾驶结果保存和多处 API 操作也使用它。环境变量 `PLOTPILOT_ALLOW_DIRECT_SQLITE_WRITES` 可以显式开启直写。
+启动早期迁移仍通过 `startup_sqlite_writes_bypass_queue()` 支持直写。运行期普通 bypass 必须传非空 `reason`，进入时登记计数并记录日志；Invocation API 原有 14 处调用已改为等待 writer。合约注册、部分 continuation、自动驾驶结果保存和快照等兼容调用仍有显式例外。环境变量 `PLOTPILOT_ALLOW_DIRECT_SQLITE_WRITES` 可以显式开启直写。
 
-但 bypass 的作用域与注释不同：实现增加进程级全局整数 `_startup_sqlite_bootstrap_depth`，`allow_direct_sqlite_writes()` 只要看到大于零就放行，不核对调用线程或上下文。局部实验已确认：主线程进入 bypass 后，未进入该上下文的另一个线程也由禁止直写变成允许直写，退出后恢复。这个结论不依赖 `+= 1` 是否原子，也不需要证明上下文内存在 `await`。
+整改前全局整数会让无关线程获得直写许可。现使用带 token/reset 的 `ContextVar[int]` 保存嵌套深度，无关线程和异步任务不会因别处进入 bypass 而放行。`asyncio.to_thread` 会复制调用时的上下文，`run_in_executor` 和裸 `threading.Thread` 不自动复制；测试分别验证这些传播差异，以及线程 A 进入 bypass 时线程 B 仍被拒绝。
 
-因此当前只能说“统一连接层在 bypass 关闭时路由普通写入”，不能宣称所有运行期写入始终由唯一消费者提交。整改应先隔离 bypass 的调用作用域，收紧运行期使用，并区分启动迁移与业务写入；若选 `ContextVar`，还要验证上下文向后台任务和线程池的传播方式。原因枚举、调用点计数和告警只能辅助审计，不能替代并发隔离。
+因此可确认普通写入路由和 bypass 的上下文隔离，但不能宣称所有运行期写入均经过唯一消费者。保留的显式例外和独立连接仍应逐步收敛；原因日志与计数用于定位实际使用，不能替代调用方副作用和事务审查。
 
 ### 7.3 独立连接的不同语义
 
@@ -279,11 +281,11 @@ Variable Hub 负责把变量绑定到 `scope`、`stage`、来源、默认值、�
 | `autopilot_routes._open_sqlite_diagnostic_connection()` 的调用方 | 查询可用性，或 `BEGIN IMMEDIATE` 后提交测试写锁 | 诊断会参与写锁竞争，但没有发现该处直接修改业务行 |
 | `interfaces.runtime` 的关闭清理 | 执行 `PRAGMA wal_checkpoint(TRUNCATE)` | 属于数据库维护操作，需要与消费者关闭顺序一起审查 |
 
-### 7.4 独立脚本的队列缺口
+### 7.4 独立脚本的启动验证
 
-`scripts/start_daemon.py` 没有初始化队列、启动消费者或注入队列的显式调用。在关闭直写开关、未注册 writer、队列未就绪的受控条件下，直接调用 `DatabaseConnection.execute()` 的写分支会抛出“持久化队列未就绪，写 SQL 未能入队”；这个失败分支已局部复现，未触碰项目数据库。
+整改前只复现了队列未就绪时写 SQL 的失败分支。现 `python scripts/start_daemon.py --smoke-test` 在全新子进程中设置临时数据目录，关闭两个环境直写开关和向量存储，执行真实依赖装配、daemon 首次轮询、常规 SQL 队列写入一条暂停的小说记录、writer 屏障与独立读取，然后停止 daemon、排空消费者、关闭连接并删除临时目录。
 
-这支持“独立启动路径的持久化装配缺少明确保证”，但不等于已经完整运行脚本并验证其第一个失败位置。应在临时数据目录中补完整启动与一条业务写入的冒烟测试，不能通过全局开放直写掩盖装配问题。
+该冒烟已成功执行，并作为子进程回归测试纳入 `tests/unit/engine/test_standalone_daemon_smoke.py`。它证明独立入口的启动、写入与停止，不证明真实 LLM、向量索引或长期无人值守生成已验证。
 
 源码证据见 [`connection.py`](../infrastructure/persistence/database/connection.py)、[`write_dispatch.py`](../infrastructure/persistence/database/write_dispatch.py)、[`persistence_queue.py`](../application/engine/services/persistence_queue.py)、[`daemon_manager.py`](../interfaces/daemon_manager.py) 和 [`start_daemon.py`](../scripts/start_daemon.py)。
 
@@ -295,11 +297,11 @@ DAG 模型定义节点、端口、条件边、节点配置、运行状态、全�
 
 `DAGEngine` 优先使用 LangGraph，缺少 LangGraph 时使用自研拓扑执行器。拓扑执行器按层并行运行没有依赖的节点，支持从指定节点恢复。DAG 定义还计算结构指纹，用于缓存编译结果。
 
-### 8.2 当前不一致
+### 8.2 统一环规则与注册隔离
 
-`DAGValidator` 的 DFS 检查允许包含 `gw_retry` 的合法重试环，`DAGEngine.validate()` 内部的 `_has_cycle()` 则把所有环都判为错误。实际默认 DAG 包含写作节点经 `gw_retry` 返回 `exec_writer` 的循环，因此这两套校验语义需要统一。
+`DAGEngine._has_cycle()` 现复用 `DAGValidator` 的规则：移除经过 `gw_retry` 的边后，剩余业务图必须无环。这样既允许显式重试路径，也不会让同一强连通区域中的非法业务子环被重试节点掩盖。参数化测试分别验证合法重试环与非法业务环。
 
-当前 DAG 测试还出现了注册表中未预期的 `test_node_e`，导致测试在构造 `NodeDefinition` 时就因未知节点类型报错。这个问题属于测试或注册生命周期污染，当前测试结果暂时不能证明 DAG 校验已经稳定。
+`tests/dag/test_registry.py` 在加载内置节点后，为每条测试保存并恢复注册表的类型与元数据字典，消除了 `test_node_e` 对后续默认 DAG 构造的污染。
 
 源码证据见 [`models.py`](../application/engine/dag/models.py)、[`validator.py`](../application/engine/dag/validator.py)、[`engine.py`](../application/engine/dag/engine.py) 和 [`registry.py`](../application/engine/dag/registry.py)。
 
@@ -375,7 +377,7 @@ DAG 模型定义节点、端口、条件边、节点配置、运行状态、全�
 
 `LLMClient` 实际委托动态 provider；`chromadb_vector_store.py` 保留兼容命名，主要实现为 FAISS 与 JSON 元数据，不应按文件名判定使用了 ChromaDB 引擎。架构概览与 README 应同步这些事实，性能宣传需要可复现基准。
 
-直接执行 `interfaces/main.py` 默认监听 `0.0.0.0:8000`，与指南中显式绑定 `127.0.0.1:8005` 的命令不同。部署时应核对监听范围和访问控制；本轮没有完成认证或网络安全审计，不能只凭监听地址判定存在可利用漏洞。
+直接执行 `interfaces/main.py` 现默认监听 `127.0.0.1:8000`，CLI 也使用相同默认地址；可通过 `PLOTPILOT_BIND_HOST` 或 CLI `--host` 显式调整。指南中的 uvicorn 命令仍显式使用 `127.0.0.1:8005`，其地址由 uvicorn `--host` 控制。本轮未进行完整认证或网络安全审计。
 
 ## 11. 写文工作台建议落地顺序
 
@@ -404,25 +406,21 @@ DAG 模型定义节点、端口、条件边、节点配置、运行状态、全�
 | 优先级 | 风险 | 当前证据 | 下一步验证 |
 | --- | --- | --- | --- |
 | 前置 | 许可证可能约束目标产品的代码复用 | Apache 2.0 附带 Commons Clause | 按复用范围、价值来源与分发方式确认许可或额外授权 |
-| 高 | bypass 在进程内放行无关线程 | 全局深度计数；跨线程局部实验复现 | 隔离作用域并验证线程、异步任务和嵌套退出 |
-| 高 | 提交服务去重只在实例内，副作用先于防重落库 | API 每次创建新 service；数据库唯一键在保存时检查 | 重复请求、并发、崩溃窗口与 continuation 幂等测试 |
-| 高 | 跨层具体依赖和 API 工厂阻碍迁移 | application→infrastructure 352 条、application→interfaces 16 条、engine→interfaces 3 条源码引用 | 分类协议/DTO/具体实现，建立允许例外的依赖基线并防止新增违规 |
-| 高 | DAG 校验器允许 `gw_retry` 环，执行器校验拒绝所有环 | `validator.py` 与 `engine.py` 语义不同 | 为合法重试环和非法业务环分别补测试 |
-| 高 | 运行状态和在途任务缺少统一持久化恢复 | invocation 内存服务、非持久化写入队列和章后辅助任务 | 分别验证会话恢复、写命令提交确认和辅助任务重放，不能用同一个内存重试策略代替 |
-| 高 | 独立脚本未显式装配持久化队列 | 脚本缺初始化；未就绪分支已局部复现，完整启动未验证 | 隔离数据目录启动并完成一条业务写入 |
+| 高 | 显式 bypass 兼容路径仍可绕过 writer | ContextVar 隔离已验证，合约注册、部分 continuation、结果保存和快照仍有带原因的例外 | 根据原因计数收敛活跃调用，区分事务需求与迁移需求 |
+| 高 | 任意 continuation 副作用不能自动保证只执行一次 | 持久化抢占和步骤恢复已实现；未知 handler 的中断重试会被拒绝 | 新增 handler 必须实现自身幂等或补偿，外部文件及服务按各自协议处理 |
+| 高 | 跨层具体依赖和 API 工厂阻碍迁移 | 已固定 352 条 application→infrastructure 历史 import，并禁止新增 | 分类协议/DTO/具体实现，逐步移除存量依赖 |
+| 高 | 普通在途 SQL 和章后辅助任务缺少持久化重放 | 采纳提交已有确认与 SQLite 回执，通用队列和辅助任务仍在内存 | 设计任务日志、重放和故障交接；本机文件锁不替代多机协调 |
+| 高 | 独立 daemon 的真实生成尚未验证 | 已通过隔离目录启动、普通队列写入、读取和停止 | 在明确配置下另行验证真实 LLM、向量索引与长时间运行 |
 | 高 | 生产章节路径存在 StoryPipeline 与 legacy 分叉 | `writing_delegate.py` 通过环境变量选择 | 统计真实运行配置，明确 legacy 的退出时间 |
-| 高 | DAG 测试不在后端 CI 命令中 | backend-ci 仅在匹配文件的 PR 上跑 `tests/unit` | 明确主分支触发策略，纳入 DAG 和必要集成检查，验证 Python 版本矩阵 |
-| 高 | AI Invocation 变量快照契约仍在演进 | 初轮 86 个测试中 80 通过、6 失败，集中在别名扩展、scope/stage 推断和 continuation 输入校验 | 统一快照键策略，补重启恢复、故事级变量和幕规划 continuation 契约测试 |
+| 高 | CI Python 版本声明和集成覆盖仍有限 | 已加入依赖基线、`tests/dag` 与 master push 触发；Python 3.11 与发布 3.14 不同 | 明确支持矩阵，补必要集成检查 |
 | 中 | 质量失败有 warning 继续语义 | `BaseStoryPipeline` 和 `ChapterAftermathPipeline` | 为自动驾驶、人工辅助和强制提交分别定义策略矩阵 |
 | 中 | DAG 事件可能被聚合器或前端队列丢弃 | `NodeEventAggregator` 和 `useDAGSSE` 都会合并或丢弃 | 验证 status 重同步能恢复所有权威字段 |
-| 中 | Prompt 包声明与模板变量发生漂移 | `bible-worldbuilding` 合约测试失败 | 校准 package.yaml 与模板，增加 CI 合约检查 |
 | 中 | 大型宿主、同步和路由模块提高拆分成本 | 1225–2855 行的热点文件及 runner 多重继承 | 先梳理调用和副作用，再按稳定协议拆分 |
 | 中 | 独立 SQLite 连接与维护操作不受统一门禁覆盖 | 快照事务直接写入；诊断取写锁；关闭时 checkpoint | 确认活跃调用方，分别处理业务写入与维护操作 |
-| 低 | 注册表副作用污染 DAG 构造测试 | 测试出现未预期 `test_node_e` | 明确测试注册隔离和 builtins 加载生命周期 |
 
 ## 13. 测试基线
 
-初轮分析在 2026-11-24 记录了以下窄范围测试。本次评审复核未重新运行这六组，不将旧数字冒充新的执行结果；Claude 评审也明确没有运行这些测试。
+初轮分析在 2026-11-24 记录了以下窄范围测试。此表保留整改前的历史结果；整改验证单独列在第 13.3 节，不能把旧失败当作当前执行结果。
 
 | 测试 | 结果 | 说明 |
 | --- | --- | --- |
@@ -433,11 +431,11 @@ DAG 模型定义节点、端口、条件边、节点配置、运行状态、全�
 | `pytest tests/unit/application/ai_invocation -q` | 80 passed, 6 failed | 变量快照别名扩展、故事级 scope/stage 推断和幕规划 continuation 契约仍有失败用例 |
 | `pytest tests/dag -q` | 75 passed, 14 failed | DAG 测试在构造默认节点时受未预期 `test_node_e` 注册影响，另需核对环语义 |
 
-上述失败会作为当前仓库的待修复或待隔离问题保留在风险表中，相关能力按“部分落地”记录。
+其中 bypass、采纳提交、变量快照和 DAG 问题已在本轮整改；未覆盖或尚未消除的风险仍列在第 12 节。
 
-### 13.1 本次复核的执行证据
+### 13.1 整改前复核的执行证据
 
-本次本机环境为 Windows、Python 3.12.7、pytest 8.4.2；不以它代表 README 所列 3.14 的兼容性。
+历史复核和本轮整改均在 Windows、Python 3.12.7、pytest 8.4.2 上执行；不以它代表 README 所列 3.14 的兼容性。下表为整改前的缺陷复现。
 
 | 检查 | 本次结果 | 能证明的范围 |
 | --- | --- | --- |
@@ -449,9 +447,19 @@ DAG 模型定义节点、端口、条件边、节点配置、运行状态、全�
 
 ### 13.2 CI 覆盖的限制
 
-[`backend-ci.yml`](../.github/workflows/backend-ci.yml) 只在匹配 Python、requirements 或 pytest 配置文件的 `pull_request` 上运行 `pytest tests/unit -q --tb=short`，没有普通 `push` 触发，也没有包含 `tests/dag` 和 `tests/integration`。其路径过滤还不包括 workflow 文件自身。这里只记录工作流定义，未查询 GitHub 分支保护或历史运行状态。
+[`backend-ci.yml`](../.github/workflows/backend-ci.yml) 现运行依赖基线检查和 `pytest tests/unit tests/dag -q --tb=short`，在匹配改动的 PR 和 master push 上触发。路径过滤包含 Python、requirements、pytest 配置、基线、提示词包和工作流自身；仍未包含 `tests/integration`，也未查询 GitHub 分支保护或历史运行状态。
 
 后端 CI 使用 Python 3.11，README 标示 3.14，发布工作流也使用 3.14；版本声明和验证范围没有对齐。这不证明 3.11 必然无法运行，也不证明本机 3.12 的通过结果能覆盖另外两个版本。应先明确支持版本，再建立对应矩阵与 DAG、必要集成测试的门禁。
+
+### 13.3 本轮整改验证
+
+第一轮定向验证的 519 项测试全部通过：`python -m pytest tests/unit/application/ai_invocation tests/unit/application/engine tests/unit/engine tests/unit/infrastructure/persistence/database tests/unit/interfaces tests/dag -q --tb=short`。包括真实 writer、跨线程和异步上下文、重复与并发 HTTP、spawned 子进程提交、真实进程在副作用后退出、内置正文 handler 的事务回执恢复、后续内容与进度保留，以及完整独立 daemon 冒烟。
+
+`python scripts/analyze_architecture.py --check-baseline config/architecture_import_baseline.json`、`python scripts/check_docs.py` 和 `git diff --check` 通过。变量快照仍保留公开渲染别名，但只为实际绑定和未覆盖的上下文事实记录快照，避免合成别名重复，并修正默认 runtime 元数据对故事级 scope/stage 推断的遮盖。
+
+完整后端检查还修复两处既有提示词契约漂移：旧章节工作流的公开 Prompt 构建入口现在接受并传递类型画像、读者契约和节奏约束；世界观模板使用运行期 `fields_desc`，使逐维度补全只要求当前维度，相关变量同步声明在包中。最终提交顺序也补充故障测试：先保存会话终态，再保存 commit 终态；会话保存失败时 commit 保持可恢复，重试复用已完成的副作用。
+
+2026-11-25 最终执行 `python -m pytest tests/unit tests/dag -q --tb=short`，结果为 **1671 passed、7 skipped**。采纳恢复专项的 13 项测试全部通过。此结果覆盖本机后端单元测试和 DAG 测试，不包含真实 LLM 调用、完整集成套件或其他 Python 版本。
 
 ## 14. 维护方法
 

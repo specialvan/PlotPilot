@@ -13,7 +13,7 @@ def main(args=None):
 
     # serve 命令
     serve_parser = subparsers.add_parser('serve', help='启动 API 服务器')
-    serve_parser.add_argument('--host', default='127.0.0.1', help='监听地址')
+    serve_parser.add_argument('--host', default=None, help='监听地址（默认 PLOTPILOT_BIND_HOST 或 127.0.0.1）')
     serve_parser.add_argument('--port', type=int, default=8005, help='监听端口')
     serve_parser.add_argument('--reload', action='store_true', help='开启热重载')
 
@@ -21,10 +21,11 @@ def main(args=None):
 
     if parsed_args.command == 'serve':
         import uvicorn
-        from .interfaces.main import app
+        from interfaces.main import app
+        from interfaces.api.settings import get_backend_settings
 
         _port = parsed_args.port
-        _host = parsed_args.host
+        _host = parsed_args.host or get_backend_settings().bind_host
 
         # 端口被占用时自动杀掉占用进程
         import socket as _socket
