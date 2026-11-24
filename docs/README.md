@@ -5,6 +5,7 @@
 | 文档 | 说明 |
 |------|------|
 | [ARCHITECTURE.md](ARCHITECTURE.md) | 分层目录、模块职责与数据流概览 |
+| [ENGINEERING_MODEL.md](ENGINEERING_MODEL.md) | 状态权威、提交所有权、恢复协议、反馈一致性与可复核不变量 |
 | [ARCHITECTURE_TRANSFERABILITY.md](ARCHITECTURE_TRANSFERABILITY.md) | 架构能力、依赖实测、迁移许可、测试边界与风险清单 |
 | [BUILD_INSTALLER.md](BUILD_INSTALLER.md) | Windows / macOS 安装包的本地构建要点 |
 | [RELEASE_DESKTOP.md](RELEASE_DESKTOP.md) | 三平台签名发布、GitHub Actions 与发布后验证 |
