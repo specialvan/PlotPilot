@@ -1,5 +1,7 @@
 """OpenAI LLM 提供商实现"""
 import asyncio
+import inspect
+import json
 import logging
 import openai
 import httpx
@@ -23,12 +25,9 @@ class OpenAIProvider(BaseProvider):
     """OpenAI LLM 提供商实现
 
     通过 use_legacy_chat_completions 显式选择协议：
-    - False（默认）：走 Responses API，失败时自动降级到 Chat Completions
+    - False（默认）：走 Responses API，仅在确认端点不支持时降级到 Chat Completions
     - True：走 Chat Completions API
     """
-
-    # 静态类级别缓存：记录哪些 base_url 不支持 Responses API，从而避免重复降级带来的延迟开销
-    _fallback_to_chat_cache: set[str] = set()
 
     def __init__(self, settings: Settings):
         super().__init__(settings)
@@ -37,18 +36,26 @@ class OpenAIProvider(BaseProvider):
             raise ValueError("API key is required for OpenAIProvider")
 
         self._use_legacy = settings.use_legacy_chat_completions
+        # Capabilities belong to this profile, model, and request mode. One bad
+        # key/model/format must not downgrade every user of the same gateway.
+        self._responses_unsupported: set[tuple[str, bool]] = set()
+        self._schema_unsupported: set[str] = set()
+        self._request_timeout = build_httpx_timeout(settings.http_timeout_settings)
 
         client_kwargs = {
             "api_key": settings.api_key,
             # Settings is already resolved from a single profile. Omitting this
             # lets the SDK silently inherit an unrelated OPENAI_BASE_URL.
             "base_url": settings.base_url or "https://api.openai.com/v1",
-            "timeout": settings.timeout_seconds,
+            "timeout": self._request_timeout,
+            # Retry policy is owned by this provider/pipeline. Leaving the SDK
+            # default (2) would multiply the provider's own retry budget.
+            "max_retries": 0,
             "default_headers": settings.extra_headers or None,
             "default_query": settings.extra_query or None,
         }
         self._http_client = httpx.AsyncClient(
-            timeout=build_httpx_timeout(settings.http_timeout_settings),
+            timeout=self._request_timeout,
             trust_env=False,
         )
         client_kwargs["http_client"] = self._http_client
@@ -59,141 +66,129 @@ class OpenAIProvider(BaseProvider):
         prompt: Prompt,
         config: GenerationConfig
     ) -> GenerationResult:
-        try:
-            base_url = self.settings.base_url or "https://api.openai.com/v1"
-            use_responses = not self._use_legacy and base_url not in self.__class__._fallback_to_chat_cache
-
-            if use_responses:
-                try:
-                    return await self._generate_via_responses(prompt, config)
-                except (openai.NotFoundError, openai.BadRequestError) as e:
-                    logger.info(f"Responses API unsupported for {base_url}, falling back to chat completions: {str(e)}")
-                    self.__class__._fallback_to_chat_cache.add(base_url)
-                except Exception as e:
-                    # 某些网关在路径错误时可能不抛严格的 404 而是抛出其他错误，如果消息含有明确路径错误也尝试降级
-                    if "404" in str(e) or "Not Found" in str(e) or "400" in str(e) or "Account invalid" in str(e) or "INVALID_ARGUMENT" in str(e):
-                        logger.info(f"Gateway returned error for Responses API ({base_url}), falling back: {str(e)}")
-                        self.__class__._fallback_to_chat_cache.add(base_url)
-                    else:
-                        raise
-
-            # 使用降级的 Chat Completions API
-            return await self._generate_via_chat(prompt, config)
-        except RuntimeError:
-            raise
-        except ValueError:
-            raise
-        except Exception as e:
-            raise RuntimeError(f"Failed to generate text: {str(e)}") from e
+        for attempt in range(LLM_MAX_TOTAL_ATTEMPTS):
+            try:
+                capability = (self._model_id(config), False)
+                if not self._use_legacy and capability not in self._responses_unsupported:
+                    try:
+                        return await self._generate_via_responses(prompt, config)
+                    except Exception as exc:
+                        if not self._responses_endpoint_unsupported(exc):
+                            raise
+                        self._responses_unsupported.add(capability)
+                        logger.info("Responses endpoint unavailable; using Chat for model=%s", capability[0])
+                return await self._generate_via_chat(prompt, config)
+            except Exception as exc:
+                if attempt < LLM_MAX_TOTAL_ATTEMPTS - 1 and is_retryable_llm_error(exc):
+                    delay = min(1.5 * (2 ** attempt), 8.0)
+                    logger.warning("LLM transient failure; retrying in %.1fs (attempt=%d/%d): %s",
+                                   delay, attempt + 1, LLM_MAX_TOTAL_ATTEMPTS, self._error_description(exc))
+                    await asyncio.sleep(delay)
+                    continue
+                if isinstance(exc, (RuntimeError, ValueError)):
+                    raise
+                raise RuntimeError(f"Failed to generate text: {self._error_description(exc)}") from exc
+        raise RuntimeError("LLM retry budget exhausted")
 
     async def _generate_via_chat(self, prompt: Prompt, config: GenerationConfig) -> GenerationResult:
-        """Chat Completions API 非流式生成
-
-        🔥 自适应容错策略：
-        1. 如果指定了 json_schema response_format 但网关返回 400，自动降级到 json_object
-        2. 如果内容为空，降级到流式聚合（部分网关非流式返回空但流式正常）
-        3. 如果非流式与流式聚合都为空，按统一 LLM 重试预算进行有限重试
-        """
+        """Chat generation, with targeted schema and empty-body compatibility."""
         messages = self._build_messages(prompt)
-        last_error: Exception | None = None
+        request_kwargs = self._build_chat_request_kwargs(messages, config)
+        response = await self._create_chat(request_kwargs, config)
+        self._validate_chat_finish(response)
+        content = self._extract_text_from_response(response)
+        if not content:
+            logger.warning("Chat returned empty non-stream content; aggregating stream")
+            content, token_usage = await self._generate_via_stream(request_kwargs)
+            return GenerationResult(content=content, token_usage=token_usage)
 
-        for attempt in range(LLM_MAX_TOTAL_ATTEMPTS):
-            request_kwargs = self._build_chat_request_kwargs(messages, config)
-            try:
-                try:
-                    response = await self.async_client.chat.completions.create(**request_kwargs)
-                except (openai.BadRequestError, openai.NotFoundError) as e:
-                    # 🔥 json_schema 不支持时自动降级
-                    if config.response_format and config.response_format.get("type") == "json_schema":
-                        base_url = (self.settings.base_url or "").rstrip("/")
-                        logger.info(
-                            "json_schema 不支持，自动降级到 json_object: %s (错误: %s)",
-                            base_url, str(e)[:100]
-                        )
-                        self.__class__._json_schema_unsupported_cache.add(base_url)
-                        request_kwargs["response_format"] = {"type": "json_object"}
-                        response = await self.async_client.chat.completions.create(**request_kwargs)
-                    else:
-                        raise
-
-                content = self._extract_text_from_response(response)
-
-                if not content:
-                    logger.warning(
-                        "OpenAI-compatible response returned empty non-stream content; "
-                        "falling back to streaming aggregation (attempt=%d/%d)",
-                        attempt + 1,
-                        LLM_MAX_TOTAL_ATTEMPTS,
-                    )
-                    content, token_usage = await self._generate_via_stream(request_kwargs)
-                    return GenerationResult(content=content, token_usage=token_usage)
-
-                input_tokens = response.usage.prompt_tokens if response.usage else 0
-                output_tokens = response.usage.completion_tokens if response.usage else 0
-                return GenerationResult(
-                    content=content,
-                    token_usage=TokenUsage(input_tokens=input_tokens, output_tokens=output_tokens),
-                )
-            except Exception as exc:
-                last_error = exc
-                if attempt >= LLM_MAX_TOTAL_ATTEMPTS - 1 or not is_retryable_llm_error(exc):
-                    raise
-                delay = min(1.5 * (2 ** attempt), 8.0)
-                logger.warning(
-                    "OpenAI-compatible provider transient failure; retrying in %.1fs "
-                    "(attempt=%d/%d): %s",
-                    delay,
-                    attempt + 1,
-                    LLM_MAX_TOTAL_ATTEMPTS,
-                    exc,
-                )
-                await asyncio.sleep(delay)
-
-        if last_error is not None:
-            raise last_error
-        raise RuntimeError("API returned empty content")
+        usage = self._response_field(response, "usage", None)
+        return GenerationResult(
+            content=content,
+            token_usage=TokenUsage(
+                input_tokens=self._usage_tokens(usage, "prompt_tokens", "input_tokens"),
+                output_tokens=self._usage_tokens(usage, "completion_tokens", "output_tokens"),
+            ),
+        )
 
     async def stream_generate(
         self,
         prompt: Prompt,
         config: GenerationConfig
     ) -> AsyncIterator[str]:
+        stream = None
         try:
-            base_url = self.settings.base_url or "https://api.openai.com/v1"
-            use_responses = not self._use_legacy and base_url not in self.__class__._fallback_to_chat_cache
-
-            if use_responses:
+            capability = (self._model_id(config), True)
+            if not self._use_legacy and capability not in self._responses_unsupported:
+                emitted = False
+                terminal = False
                 try:
-                    # 尝试走 Responses 流式 API
                     request_kwargs = self._build_responses_request_kwargs(prompt, config, stream=True)
                     stream = await self.async_client.responses.create(**request_kwargs)
                     async for chunk in stream:
+                        event = self._response_field(chunk, "type", "")
+                        if event in {"response.refusal.delta", "response.refusal.done"}:
+                            raise RuntimeError("Responses API refused the requested output")
+                        if event in {"response.failed", "response.incomplete", "response.cancelled", "error"}:
+                            response = self._response_field(chunk, "response", chunk)
+                            self._validate_responses_status(response, fallback_status=event)
+                        if event == "response.completed":
+                            response = self._response_field(chunk, "response", None)
+                            content = ""
+                            if response is not None:
+                                self._validate_responses_status(response)
+                                # Validate the final snapshot even after text
+                                # deltas: a refusal must never become success.
+                                content = self._extract_text_from_responses_response(response)
+                            # Some compatible gateways send a complete snapshot
+                            # without any deltas. Never replay it after deltas.
+                            if not emitted and content:
+                                emitted = True
+                                yield content
+                            terminal = True
+                            break
                         content = self._extract_text_from_responses_chunk(chunk)
                         if content:
+                            emitted = True
                             yield content
-                    return  # 正常完成则结束 generator
-                except (openai.NotFoundError, openai.BadRequestError):
-                    self.__class__._fallback_to_chat_cache.add(base_url)
-                    logger.info(f"Stream: Responses API unsupported for {base_url}, falling back.")
-                except Exception as e:
-                    if "404" in str(e) or "Not Found" in str(e) or "400" in str(e) or "Account invalid" in str(e) or "INVALID_ARGUMENT" in str(e):
-                        self.__class__._fallback_to_chat_cache.add(base_url)
-                        logger.info(f"Stream: Gateway returned error for Responses API ({base_url}), falling back.")
-                    else:
-                        logger.error(f"[Responses Stream] Failed: {e}")
+                    if not terminal:
+                        raise RuntimeError("Responses stream ended before response.completed")
+                    if not emitted:
+                        raise RuntimeError("Responses API returned empty content")
+                    return
+                except Exception as exc:
+                    # Replaying a generation after emitting a prefix corrupts
+                    # output. Only a confirmed missing endpoint may switch API.
+                    if emitted or not self._responses_endpoint_unsupported(exc):
                         raise
+                    self._responses_unsupported.add(capability)
+                    logger.info("Responses stream endpoint unavailable; using Chat for model=%s", capability[0])
+                finally:
+                    await self._close_stream(stream)
+                    stream = None
 
-            # 降级：走原来的 Chat Completions 流式 API
             messages = self._build_messages(prompt)
             request_kwargs = self._build_chat_request_kwargs(messages, config, stream=True)
-            stream = await self.async_client.chat.completions.create(**request_kwargs)
+            stream = await self._create_chat(request_kwargs, config)
+            emitted = False
+            terminal = False
             async for chunk in stream:
+                finish_reason = self._validate_chat_finish(chunk)
                 content = self._extract_text_from_stream_chunk(chunk)
                 if content:
+                    emitted = True
                     yield content
-        except Exception as e:
-            logger.error(f"[Stream] Failed: {e}")
-            raise RuntimeError(f"Failed to stream text: {str(e)}") from e
+                if finish_reason:
+                    terminal = True
+                    break
+            if not terminal:
+                raise RuntimeError("Chat stream ended before finish_reason")
+            if not emitted:
+                raise RuntimeError("Chat API returned empty content")
+        except Exception as exc:
+            raise RuntimeError(f"Failed to stream text: {self._error_description(exc)}") from exc
+        finally:
+            await self._close_stream(stream)
 
     @staticmethod
     def _build_messages(prompt: Prompt) -> list[dict[str, str]]:
@@ -202,8 +197,95 @@ class OpenAIProvider(BaseProvider):
             {"role": "user", "content": prompt.user}
         ]
 
-    # 🔥 记录已知不支持 json_schema 的 base_url（避免每次重试）
-    _json_schema_unsupported_cache: set[str] = set()
+    def _model_id(self, config: GenerationConfig) -> str:
+        return require_resolved_model_id(config.model, self.settings.default_model, provider_label="OpenAI 兼容")
+
+    @staticmethod
+    def _error_description(exc: Exception) -> str:
+        return f"{type(exc).__name__}: {str(exc).strip() or 'upstream request failed'}"
+
+    @staticmethod
+    def _error_body(exc: Exception) -> str:
+        body = getattr(exc, "body", None)
+        return (json.dumps(body, default=str) if body else str(exc)).lower()
+
+    @classmethod
+    def _responses_endpoint_unsupported(cls, exc: Exception) -> bool:
+        if not isinstance(exc, openai.APIStatusError):
+            return False
+        status = exc.status_code
+        detail = cls._error_body(exc)
+        # Missing model, invalid schema, auth, quota and context-length errors
+        # are request failures, not evidence that Responses is unavailable.
+        if "model" in detail or "schema" in detail or "response_format" in detail:
+            return False
+        if status in {404, 405, 501}:
+            return True
+        return status == 400 and "responses" in detail and any(
+            marker in detail for marker in ("not supported", "unsupported endpoint", "unknown endpoint", "unknown path")
+        )
+
+    @classmethod
+    def _schema_format_unsupported(cls, exc: Exception) -> bool:
+        if not isinstance(exc, openai.APIStatusError) or exc.status_code not in {400, 422}:
+            return False
+        detail = cls._error_body(exc)
+        if "invalid schema" in detail or "invalid_json_schema" in detail:
+            return False
+        return any(field in detail for field in ("json_schema", "response_format")) and any(
+            marker in detail for marker in ("not supported", "unsupported", "not support")
+        )
+
+    async def _create_chat(self, request_kwargs: dict[str, Any], config: GenerationConfig):
+        try:
+            return await self.async_client.chat.completions.create(**request_kwargs)
+        except Exception as exc:
+            fmt = request_kwargs.get("response_format") or {}
+            if fmt.get("type") != "json_schema" or not self._schema_format_unsupported(exc):
+                raise
+            self._schema_unsupported.add(self._model_id(config))
+            request_kwargs["response_format"] = {"type": "json_object"}
+            logger.info("Model does not support json_schema; using json_object for model=%s", self._model_id(config))
+            return await self.async_client.chat.completions.create(**request_kwargs)
+
+    @classmethod
+    def _validate_responses_status(cls, response: Any, *, fallback_status: str = "") -> None:
+        status = cls._response_field(response, "status", "") or fallback_status
+        if status and status != "completed":
+            incomplete = cls._response_field(response, "incomplete_details", None)
+            reason = cls._response_field(incomplete, "reason", "") if incomplete else ""
+            error = cls._response_field(response, "error", None) or response
+            message = cls._response_field(error, "message", "")
+            details = ", ".join(str(part) for part in (status, reason, message) if part)
+            raise RuntimeError(f"Responses API did not complete ({details})")
+
+    @classmethod
+    def _validate_chat_finish(cls, response: Any) -> str:
+        choices = cls._response_field(response, "choices", None) or []
+        if not choices:
+            return ""
+        reason = cls._response_field(choices[0], "finish_reason", "") or ""
+        if reason in {"length", "content_filter"}:
+            raise RuntimeError(f"Chat API did not complete (finish_reason={reason})")
+        message = cls._response_field(choices[0], "message", None) or cls._response_field(choices[0], "delta", None)
+        if cls._response_field(message, "refusal", None):
+            raise RuntimeError("Chat API refused the requested output")
+        return reason
+
+    @staticmethod
+    async def _close_stream(stream: Any) -> None:
+        if stream is None:
+            return
+        close = getattr(stream, "close", None) or getattr(stream, "aclose", None)
+        if callable(close):
+            try:
+                result = close()
+                if inspect.isawaitable(result):
+                    await result
+            except Exception:
+                # Cleanup failures must not hide an upstream failure or replace
+                # a completed answer with a transport-close error.
+                logger.debug("Failed to close upstream LLM stream", exc_info=True)
 
     def _build_chat_request_kwargs(
         self,
@@ -225,7 +307,7 @@ class OpenAIProvider(BaseProvider):
             "extra_headers": self.settings.extra_headers or None,
             "extra_query": self.settings.extra_query or None,
             "extra_body": self.settings.extra_body or None,
-            "timeout": self.settings.timeout_seconds,
+            "timeout": self._request_timeout,
         }
 
         # 🔥 response_format 自适应降级策略
@@ -237,11 +319,7 @@ class OpenAIProvider(BaseProvider):
         #   智谱/GLM:     json_schema ❌ | json_object ✅
         if config.response_format:
             fmt = config.response_format
-            base_url = (self.settings.base_url or "").rstrip("/")
-
-            if fmt.get("type") == "json_schema" and base_url in self.__class__._json_schema_unsupported_cache:
-                # 已知不支持 json_schema，自动降级到 json_object
-                logger.debug("json_schema 已知不支持，降级到 json_object: %s", base_url)
+            if fmt.get("type") == "json_schema" and model_id in self._schema_unsupported:
                 kwargs["response_format"] = {"type": "json_object"}
             else:
                 kwargs["response_format"] = fmt
@@ -268,18 +346,53 @@ class OpenAIProvider(BaseProvider):
             "input": [{"role": "user", "content": prompt.user}],
             "temperature": config.temperature,
             "max_output_tokens": config.max_tokens,
+            "extra_headers": self.settings.extra_headers or None,
+            "extra_query": self.settings.extra_query or None,
+            "extra_body": self.settings.extra_body or None,
+            "timeout": self._request_timeout,
         }
-        if self.settings.extra_body:
-             kwargs.update(self.settings.extra_body)
-
+        response_format = self._responses_text_format(config.response_format)
+        if response_format is not None:
+            kwargs["text"] = {"format": response_format}
         if stream:
             kwargs["stream"] = True
         return kwargs
+
+    @staticmethod
+    def _responses_text_format(response_format: dict[str, Any] | None) -> dict[str, Any] | None:
+        """Translate the shared Chat Completions format to Responses ``text``.
+
+        The application keeps one provider-neutral contract. Responses uses a
+        different JSON-schema envelope, so passing the Chat shape through would
+        silently drop structured-output guarantees at OpenAI-compatible gateways.
+        """
+        if not response_format:
+            return None
+        fmt_type = response_format.get("type")
+        if fmt_type in {"text", "json_object"}:
+            return {"type": fmt_type}
+        if fmt_type != "json_schema":
+            raise ValueError(f"Unsupported response_format type: {fmt_type}")
+        schema_payload = response_format.get("json_schema") or {}
+        schema = schema_payload.get("schema")
+        if not isinstance(schema, dict):
+            raise ValueError("json_schema response_format requires a schema object")
+        name = str(schema_payload.get("name") or "response").strip() or "response"
+        result = {
+            "type": "json_schema",
+            "name": name,
+            "schema": schema,
+        }
+        for field in ("strict", "description"):
+            if field in schema_payload:
+                result[field] = schema_payload[field]
+        return result
 
     async def _generate_via_responses(self, prompt: Prompt, config: GenerationConfig) -> GenerationResult:
         """Responses API 非流式生成"""
         request_kwargs = self._build_responses_request_kwargs(prompt, config)
         response = await self.async_client.responses.create(**request_kwargs)
+        self._validate_responses_status(response)
 
         content = self._extract_text_from_responses_response(response)
         if not content:
@@ -314,20 +427,22 @@ class OpenAIProvider(BaseProvider):
         gateways still emit the older ``text`` spelling, so both are accepted.
         The SDK's aggregate ``response.output_text`` is preferred when present.
         """
-        aggregate = cls._response_field(response, "output_text", "")
-        if isinstance(aggregate, str) and aggregate.strip():
-            return aggregate.strip()
-
         content_parts: list[str] = []
         for item in cls._response_field(response, "output", None) or []:
             if cls._response_field(item, "type", "") != "message":
                 continue
             for part in cls._response_field(item, "content", None) or []:
-                if cls._response_field(part, "type", "") not in {"output_text", "text"}:
+                part_type = cls._response_field(part, "type", "")
+                if part_type == "refusal":
+                    raise RuntimeError("Responses API refused the requested output")
+                if part_type not in {"output_text", "text"}:
                     continue
                 piece = cls._response_field(part, "text", "")
                 if isinstance(piece, str) and piece.strip():
                     content_parts.append(piece.strip())
+        aggregate = cls._response_field(response, "output_text", "")
+        if isinstance(aggregate, str) and aggregate.strip():
+            return aggregate.strip()
         return "\n".join(content_parts).strip()
 
     @classmethod
@@ -342,24 +457,24 @@ class OpenAIProvider(BaseProvider):
         except (TypeError, ValueError):
             return 0
 
-    @staticmethod
-    def _extract_text_from_responses_chunk(chunk: Any) -> str:
+    @classmethod
+    def _extract_text_from_responses_chunk(cls, chunk: Any) -> str:
         """原生 Responses stream 解析封装"""
         try:
-            event_type = getattr(chunk, "type", "")
+            event_type = cls._response_field(chunk, "type", "")
             if event_type == "response.output_text.delta":
-                delta = getattr(chunk, "delta", None)
+                delta = cls._response_field(chunk, "delta", None)
                 if isinstance(delta, str):
                     return delta
             elif event_type in ("response.content_part.added", "response.content_part.delta"):
-                part = getattr(chunk, "part", None)
-                if part and getattr(part, "type", "") in {"output_text", "text"}:
-                    return getattr(part, "text", "")
-                delta = getattr(chunk, "delta", None)
+                part = cls._response_field(chunk, "part", None)
+                if part and cls._response_field(part, "type", "") in {"output_text", "text"}:
+                    return cls._response_field(part, "text", "")
+                delta = cls._response_field(chunk, "delta", None)
                 if isinstance(delta, str):
                     return delta
             elif event_type == "message.delta":
-                delta = getattr(chunk, "delta", None)
+                delta = cls._response_field(chunk, "delta", None)
                 if delta:
                      content = getattr(delta, "content", None)
                      if isinstance(content, str):
@@ -427,22 +542,6 @@ class OpenAIProvider(BaseProvider):
     @staticmethod
     def _extract_text_from_stream_chunk(chunk: Any) -> str:
         if not getattr(chunk, "choices", None):
-            # 🔥 容错：部分网关返回的流式 chunk 没有 choices 字段
-            # 例如 DeepSeek-R1 的 reasoning_content 字段在顶层
-            return ""
-
-        choice = chunk.choices[0]
-        delta = getattr(choice, "delta", None)
-        content = getattr(delta, "content", None)
-        if isinstance(content, str):
-            return content
-        if isinstance(content, list):
-            return OpenAIProvider._normalize_chat_completion_content(content)
-        return ""
-
-    @staticmethod
-    def _extract_text_from_stream_chunk(chunk: Any) -> str:
-        if not getattr(chunk, "choices", None):
             return ""
 
         delta = getattr(chunk.choices[0], "delta", None)
@@ -462,19 +561,30 @@ class OpenAIProvider(BaseProvider):
         input_tokens = 0
         output_tokens = 0
 
-        async for chunk in stream:
-            content = self._extract_text_from_stream_chunk(chunk)
-            if content:
-                parts.append(content)
+        terminal = False
+        try:
+            async for chunk in stream:
+                finish_reason = self._validate_chat_finish(chunk)
+                if finish_reason:
+                    terminal = True
+                content = self._extract_text_from_stream_chunk(chunk)
+                if content:
+                    parts.append(content)
 
-            usage = getattr(chunk, "usage", None)
-            if usage is not None:
-                input_tokens = getattr(usage, "prompt_tokens", 0) or 0
-                output_tokens = getattr(usage, "completion_tokens", 0) or 0
+                usage = getattr(chunk, "usage", None)
+                if usage is not None:
+                    input_tokens = self._usage_tokens(usage, "prompt_tokens", "input_tokens")
+                    output_tokens = self._usage_tokens(usage, "completion_tokens", "output_tokens")
+                if finish_reason:
+                    break
+        finally:
+            await self._close_stream(stream)
 
         content = "".join(parts).strip()
         if not content:
             raise RuntimeError("API returned empty content")
+        if not terminal:
+            raise RuntimeError("Chat stream ended before finish_reason")
 
         return content, TokenUsage(
             input_tokens=input_tokens,

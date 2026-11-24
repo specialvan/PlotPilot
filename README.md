@@ -262,6 +262,8 @@ cd frontend && npm install && npm run dev
 
 模型环境变量在空数据库首次启动时初始化档案；已有配置请在「LLM 控制」中保存并激活目标档案。多种提供方同时存在时，可用 `LLM_PROVIDER=openai` 选择以 `gpt_*` 或 `OPENAI_*` 初始化。
 
+模型档案中的小预算会按配置保留，连通性测试单独使用 128 个输出 token。协议回退、结构化输出、重试与流式取消行为见 [LLM 配置与调用行为](docs/LLM_RUNTIME.md)。
+
 ---
 
 ## 架构目录

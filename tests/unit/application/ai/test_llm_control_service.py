@@ -1,3 +1,9 @@
+import asyncio
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
+
+import pytest
+
 from application.ai.llm_control_service import LLMControlConfig, LLMControlService, LLMProfile
 from domain.ai.services.llm_service import DEFAULT_MAX_OUTPUT_TOKENS
 from infrastructure.ai.llm_environment import ARK_DEFAULT_BASE_URL
@@ -103,13 +109,13 @@ def test_initial_config_uses_gpt_gateway_alias_with_explicit_provider(monkeypatc
     assert active.model == "gateway-model"
 
 
-def test_profile_lifts_small_max_tokens_to_global_floor():
+def test_profile_preserves_small_explicit_max_tokens():
     profile = LLMProfile(id="p", name="Profile", max_tokens=4096)
 
-    assert profile.max_tokens == DEFAULT_MAX_OUTPUT_TOKENS
+    assert profile.max_tokens == 4096
 
 
-def test_row_to_profile_preserves_max_tokens_above_global_floor():
+def test_row_to_profile_preserves_large_explicit_max_tokens():
     row = {
         "id": "p",
         "name": "Profile",
@@ -185,3 +191,111 @@ def test_unified_mode_ignores_independent_role_profile():
 
     assert resolved is not None
     assert resolved.id == "main"
+
+
+def test_save_and_reload_preserve_explicit_token_budget(tmp_path, monkeypatch):
+    from infrastructure.persistence.database.connection import DatabaseConnection
+
+    db = DatabaseConnection(str(tmp_path / "llm-control.db"))
+    service = LLMControlService()
+    monkeypatch.setattr(service, "_db", lambda: db)
+    config = LLMControlConfig(profiles=[LLMProfile(id="p", name="Profile", max_tokens=512)])
+    try:
+        saved = service.save_config(config)
+        loaded = service.get_config()
+        assert saved.profiles[0].max_tokens == 512
+        assert loaded.profiles[0].max_tokens == 512
+    finally:
+        db.close_all()
+
+
+def _probe_profile(**overrides):
+    return LLMProfile(id="p", name="Probe", api_key="test-key", model="test-model", **overrides)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("close_fails", [False, True])
+async def test_connectivity_probe_uses_small_budget_and_always_closes(close_fails):
+    provider = SimpleNamespace(
+        generate=AsyncMock(return_value=SimpleNamespace(content="OK")),
+        aclose=AsyncMock(side_effect=RuntimeError("close failed") if close_fails else None),
+    )
+    result = await LLMControlService().test_profile_model(_probe_profile(), lambda _: provider)
+
+    assert result.ok
+    _, config = provider.generate.await_args.args
+    assert config.max_tokens == 128
+    assert config.temperature == 0
+    provider.aclose.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error", [RuntimeError("upstream failed"), TimeoutError()])
+async def test_connectivity_probe_reports_failure_and_closes(error):
+    provider = SimpleNamespace(generate=AsyncMock(side_effect=error), aclose=AsyncMock())
+
+    result = await LLMControlService().test_profile_model(_probe_profile(), lambda _: provider)
+
+    assert not result.ok
+    assert result.error
+    if isinstance(error, TimeoutError):
+        assert "60" in result.error
+        assert "超时" in result.error
+    else:
+        assert result.error == "upstream failed"
+    provider.aclose.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("timeout_seconds, expected", [(2, 2), (300, 60)])
+async def test_connectivity_probe_enforces_total_timeout(monkeypatch, timeout_seconds, expected):
+    timeouts = []
+    real_timeout = asyncio.timeout
+    cancelled = asyncio.Event()
+
+    def immediate_timeout(seconds):
+        timeouts.append(seconds)
+        return real_timeout(0)
+
+    async def blocked(*_):
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    monkeypatch.setattr("application.ai.llm_control_service.asyncio.timeout", immediate_timeout)
+    provider = SimpleNamespace(generate=AsyncMock(side_effect=blocked), aclose=AsyncMock())
+
+    result = await LLMControlService().test_profile_model(
+        _probe_profile(timeout_seconds=timeout_seconds), lambda _: provider,
+    )
+
+    assert not result.ok
+    assert timeouts == [expected]
+    assert cancelled.is_set()
+    provider.aclose.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_connectivity_probe_propagates_cancellation_and_closes():
+    entered = asyncio.Event()
+
+    async def blocked(*_):
+        entered.set()
+        await asyncio.Event().wait()
+
+    provider = SimpleNamespace(generate=AsyncMock(side_effect=blocked), aclose=AsyncMock())
+    task = asyncio.create_task(LLMControlService().test_profile_model(_probe_profile(), lambda _: provider))
+    await asyncio.wait_for(entered.wait(), timeout=1)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    provider.aclose.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_connectivity_probe_rejects_missing_credentials_without_creating_provider():
+    factory = Mock()
+    result = await LLMControlService().test_profile_model(LLMProfile(id="p", name="Probe"), factory)
+    assert not result.ok
+    factory.assert_not_called()

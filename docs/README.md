@@ -9,6 +9,7 @@
 | [BUILD_INSTALLER.md](BUILD_INSTALLER.md) | Windows / macOS 安装包的本地构建要点 |
 | [RELEASE_DESKTOP.md](RELEASE_DESKTOP.md) | 三平台签名发布、GitHub Actions 与发布后验证 |
 | [LOGGING.md](LOGGING.md) | 日志配置、查看与故障定位 |
+| [LLM_RUNTIME.md](LLM_RUNTIME.md) | 模型档案、预算继承、协议回退、流式失败与连接释放 |
 | [embedding_model_download_guide.md](embedding_model_download_guide.md) | 本地向量嵌入模型下载与配置 |
 
 仓库总览、启动方式与环境变量以根目录 [README.md](../README.md) 与 [.env.example](../.env.example) 为准。

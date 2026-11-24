@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from time import perf_counter
@@ -74,7 +75,7 @@ class LLMProfile(BaseModel):
     def _validate_max_tokens(cls, value: int) -> int:
         if value <= 0:
             raise ValueError('value must be positive')
-        return max(value, DEFAULT_MAX_OUTPUT_TOKENS)
+        return int(value)
 
     @field_validator('timeout_seconds')
     @classmethod
@@ -502,6 +503,8 @@ class LLMControlService:
                 error='请先填写 API Key 与模型名后再测试',
             )
         started = perf_counter()
+        llm_service = None
+        probe_timeout = min(resolved.timeout_seconds, 60)
         try:
             llm_service = llm_service_factory(resolved)
             from domain.ai.value_objects.prompt import Prompt
@@ -512,10 +515,13 @@ class LLMControlService:
             )
             config = GenerationConfig(
                 model=resolved.model,
-                max_tokens=DEFAULT_MAX_OUTPUT_TOKENS,
+                max_tokens=128,
                 temperature=0,
             )
-            result = await llm_service.generate(prompt, config)
+            # A connectivity probe must be bounded independently of SDK retries
+            # and the long-form generation profile's output budget.
+            async with asyncio.timeout(probe_timeout):
+                result = await llm_service.generate(prompt, config)
             latency_ms = int((perf_counter() - started) * 1000)
             body = (result.content or '').strip()
             if not body:
@@ -540,8 +546,10 @@ class LLMControlService:
         except Exception as exc:
             latency_ms = int((perf_counter() - started) * 1000)
             err_text = str(exc).strip()
-            if not err_text:
-                err_text = "未知错误（异常无消息），请查看服务端日志。"
+            if isinstance(exc, TimeoutError):
+                err_text = f"连通性测试超时（最多 {probe_timeout} 秒），请检查网关状态后重试。"
+            elif not err_text:
+                err_text = f"{type(exc).__name__}（异常无消息），请查看服务端日志。"
             return LLMTestResult(
                 ok=False,
                 provider_label=resolved.name,
@@ -549,6 +557,13 @@ class LLMControlService:
                 latency_ms=latency_ms,
                 error=err_text,
             )
+        finally:
+            close = getattr(llm_service, 'aclose', None)
+            if callable(close):
+                try:
+                    await close()
+                except Exception:
+                    logger.debug('关闭连通性测试客户端失败', exc_info=True)
 
     def _sanitize_config(self, config: LLMControlConfig) -> LLMControlConfig:
         profiles: List[LLMProfile] = []
@@ -567,7 +582,7 @@ class LLMControlService:
                         'base_url': profile.base_url.strip(),
                         'api_key': profile.api_key.strip(),
                         'model': profile.model.strip(),
-                        'max_tokens': DEFAULT_MAX_OUTPUT_TOKENS,
+                        'max_tokens': profile.max_tokens,
                     }
                 )
             )

@@ -12,14 +12,16 @@ class GenerationConfig:
     def __init__(
         self,
         model: str = "",
-        max_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS,
-        temperature: float = 1.0,
+        max_tokens: Optional[int] = None,
+        temperature: Optional[float] = None,
         response_format: Optional[Dict] = None,
         model_role: Optional[str] = None,
     ):
         self.model = model
-        self.max_tokens = max_tokens
-        self.temperature = temperature
+        self.max_tokens_explicit = max_tokens is not None
+        self.temperature_explicit = temperature is not None
+        self.max_tokens = DEFAULT_MAX_OUTPUT_TOKENS if max_tokens is None else max_tokens
+        self.temperature = 1.0 if temperature is None else temperature
         self.response_format = response_format
         # 多角色端点路由：'main'（默认）| 'cheap'（批量/轻量）| 'knowledge'（结构化抽取）。
         # None = 主力模型；未配置分角色档案时运行时自动回退主力（见 resolve_role_profile）
@@ -30,9 +32,13 @@ class GenerationConfig:
         """验证配置参数"""
         if not (0.0 <= self.temperature <= 2.0):
             raise ValueError("Temperature must be between 0.0 and 2.0")
+        self.max_tokens = int(self.max_tokens)
         if self.max_tokens <= 0:
             raise ValueError("max_tokens must be greater than 0")
-        self.max_tokens = max(int(self.max_tokens), DEFAULT_MAX_OUTPUT_TOKENS)
+        # DEFAULT_MAX_OUTPUT_TOKENS is the default for long-form generation.
+        # An explicit smaller budget is meaningful for planners, extractors,
+        # probes, and structured JSON calls, so preserve it instead of silently
+        # turning every request into a 120k-token request.
 
 
 class GenerationResult:

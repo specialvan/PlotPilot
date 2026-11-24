@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from domain.ai.services.llm_service import DEFAULT_MAX_OUTPUT_TOKENS, GenerationConfig
+from domain.ai.services.llm_service import GenerationConfig
 from domain.ai.value_objects.prompt import Prompt
 from infrastructure.ai.config.settings import Settings
 from infrastructure.ai.providers.openai_provider import OpenAIProvider
@@ -13,6 +13,7 @@ from infrastructure.ai.providers.openai_provider import OpenAIProvider
 class _FakeStream:
     def __init__(self, chunks):
         self._chunks = iter(chunks)
+        self.closed = False
 
     def __aiter__(self):
         return self
@@ -22,6 +23,9 @@ class _FakeStream:
             return next(self._chunks)
         except StopIteration as exc:
             raise StopAsyncIteration from exc
+
+    async def close(self):
+        self.closed = True
 
 
 class TestOpenAIProviderLegacy:
@@ -103,7 +107,7 @@ class TestOpenAIProviderLegacy:
             call_kwargs = mock_create.call_args.kwargs
             assert call_kwargs["model"] == "gpt-4o"
             assert call_kwargs["temperature"] == 0.7
-            assert call_kwargs["max_tokens"] == DEFAULT_MAX_OUTPUT_TOKENS
+            assert call_kwargs["max_tokens"] == 4096
 
     @pytest.mark.anyio
     async def test_generate_accepts_message_content_as_list_of_text_parts(self, provider):
@@ -145,7 +149,7 @@ class TestOpenAIProviderLegacy:
                 usage=None,
             ),
             SimpleNamespace(
-                choices=[SimpleNamespace(delta=SimpleNamespace(content=None))],
+                choices=[SimpleNamespace(delta=SimpleNamespace(content=None), finish_reason="stop")],
                 usage=SimpleNamespace(prompt_tokens=19, completion_tokens=17),
             ),
         ])
@@ -168,7 +172,7 @@ class TestOpenAIProviderLegacy:
         stream = _FakeStream([
             SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content="Hi"))]),
             SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content=" there"))]),
-            SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content=None))]),
+            SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content=None), finish_reason="stop")]),
         ])
 
         with patch.object(provider.async_client.chat.completions, "create", new_callable=AsyncMock) as mock_create:
@@ -178,6 +182,7 @@ class TestOpenAIProviderLegacy:
 
             assert chunks == ["Hi", " there"]
             assert mock_create.await_args.kwargs["stream"] is True
+            assert stream.closed
 
     @pytest.mark.anyio
     async def test_generate_empty_content_raises(self, provider):
@@ -245,7 +250,7 @@ class TestOpenAIProviderResponses:
             call_kwargs = mock_create.call_args.kwargs
             assert call_kwargs["model"] == "gpt-4o"
             assert call_kwargs["temperature"] == 0.5
-            assert call_kwargs["max_output_tokens"] == DEFAULT_MAX_OUTPUT_TOKENS
+            assert call_kwargs["max_output_tokens"] == 2048
 
     @pytest.mark.anyio
     async def test_generate_responses_prefers_sdk_output_text_aggregate(self, provider):

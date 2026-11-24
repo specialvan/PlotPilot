@@ -1,7 +1,7 @@
 """LLM 客户端包装器"""
 from typing import AsyncIterator
 
-from domain.ai.services.llm_service import DEFAULT_MAX_OUTPUT_TOKENS, GenerationConfig
+from domain.ai.services.llm_service import GenerationConfig
 from domain.ai.value_objects.prompt import Prompt
 from infrastructure.ai.provider_factory import DynamicLLMService
 
@@ -21,8 +21,8 @@ class LLMClient:
         settings = getattr(self.provider, "settings", None)
         return GenerationConfig(
             model=kwargs.get("model", getattr(settings, "default_model", None)),
-            max_tokens=kwargs.get("max_tokens", getattr(settings, "default_max_tokens", DEFAULT_MAX_OUTPUT_TOKENS)),
-            temperature=kwargs.get("temperature", getattr(settings, "default_temperature", 1.0)),
+            max_tokens=kwargs.get("max_tokens", getattr(settings, "default_max_tokens", None)),
+            temperature=kwargs.get("temperature", getattr(settings, "default_temperature", None)),
         )
 
     async def generate(self, prompt: str, **kwargs) -> str:
@@ -68,5 +68,11 @@ class LLMClient:
             config = self._build_config(**kwargs)
 
         # 流式生成
-        async for chunk in self.provider.stream_generate(prompt_obj, config):
-            yield chunk
+        stream = self.provider.stream_generate(prompt_obj, config)
+        try:
+            async for chunk in stream:
+                yield chunk
+        finally:
+            close = getattr(stream, "aclose", None)
+            if callable(close):
+                await close()

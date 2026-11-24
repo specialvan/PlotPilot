@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+import asyncio
+import hashlib
+import json
 import logging
 import time
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from typing import AsyncIterator, Optional
 
 from application.ai.llm_control_service import LLMControlService, LLMProfile
@@ -95,27 +100,23 @@ class LLMProviderFactory:
 
 
 def _make_cache_key(profile: LLMProfile) -> str:
-    """生成 Provider 缓存键，配置变化时自动重建 Provider。"""
-    key_parts = [
-        profile.protocol or "",
-        (profile.base_url or "").rstrip("/"),
-        (profile.model or "").strip(),
-        (profile.api_key or "")[:8],
-        str(profile.temperature),
-        str(profile.max_tokens),
-        str(profile.timeout_seconds),
-        str(profile.use_legacy_chat_completions),
-    ]
+    """Hash the complete effective profile without exposing credentials."""
+    payload = profile.model_dump(mode="json")
+    payload["base_url"] = (profile.base_url or "").rstrip("/")
     settings = Settings(timeout_seconds=profile.timeout_seconds)
-    key_parts.extend(
-        [
-            str(settings.connect_timeout),
-            str(settings.read_timeout),
-            str(settings.write_timeout),
-            str(settings.pool_timeout),
-        ]
-    )
-    return "|".join(key_parts)
+    payload["http_timeouts"] = [
+        settings.connect_timeout, settings.read_timeout,
+        settings.write_timeout, settings.pool_timeout,
+    ]
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+
+
+@dataclass
+class _ProviderEntry:
+    key: str
+    provider: LLMService
+    users: int = 0
+    retired: bool = False
 
 
 class DynamicLLMService(LLMService):
@@ -123,52 +124,62 @@ class DynamicLLMService(LLMService):
 
     def __init__(self, factory: Optional[LLMProviderFactory] = None):
         self.factory = factory or LLMProviderFactory()
-        self._cached_provider: Optional[LLMService] = None
-        self._cached_key: Optional[str] = None
+        self._providers: dict[str, _ProviderEntry] = {}
+        self._provider_lock = asyncio.Lock()
+        self._closed = False
 
-    async def _resolve_provider(self, config: Optional[GenerationConfig] = None) -> LLMService:
-        # 多角色端点路由：config.model_role 指定 cheap/knowledge 时解析对应
-        # 档案（未配置/统一模式自动回退主力，见 resolve_role_profile）；
-        # 缓存按 (role, 档案指纹) 区分，避免切角色后串用旧 Provider
+    @asynccontextmanager
+    async def _lease_provider(self, config: GenerationConfig) -> AsyncIterator[LLMService]:
         role = (getattr(config, "model_role", None) or "main").strip() or "main"
-        if role == "main":
-            profile = self.factory.control_service.resolve_active_profile()
-        else:
-            profile = self.factory.control_service.resolve_role_profile(role)
-        key = f"{role}|{_make_cache_key(profile) if profile else '__mock__'}"
-
-        if key == self._cached_key and self._cached_provider is not None:
-            return self._cached_provider
-
-        await self._close_cached_provider()
-
-        provider = self.factory.create_from_profile(profile)
-        self._cached_provider = provider
-        self._cached_key = key
-        logger.debug(
-            "Provider 缓存未命中，创建新实例: role=%s protocol=%s model=%s",
-            role,
-            getattr(profile, "protocol", "?"),
-            getattr(profile, "model", "?"),
-        )
-        return provider
-
-    async def _close_cached_provider(self) -> None:
-        """关闭旧 Provider 的 HTTP 连接资源。"""
-        old = self._cached_provider
-        if old is None:
-            return
-        try:
-            if hasattr(old, "aclose"):
-                await old.aclose()
+        if role not in {"main", "cheap", "knowledge"}:
+            role = "main"
+        old_to_close = None
+        async with self._provider_lock:
+            if self._closed:
+                raise RuntimeError("DynamicLLMService is closed")
+            if role == "main":
+                profile = self.factory.control_service.resolve_active_profile()
             else:
-                self._close_sync_clients(old)
-                await self._close_async_clients(old)
+                profile = self.factory.control_service.resolve_role_profile(role)
+            key = _make_cache_key(profile) if profile else "__unconfigured__"
+            entry = self._providers.get(role)
+            if entry is None or entry.key != key:
+                # Build before replacing the previous entry: an invalid edit
+                # must not retire the provider serving an in-flight request.
+                provider = self.factory.create_from_profile(profile)
+                if entry is not None:
+                    entry.retired = True
+                    if entry.users == 0:
+                        old_to_close = entry.provider
+                entry = _ProviderEntry(key=key, provider=provider)
+                self._providers[role] = entry
+                logger.debug(
+                    "Provider 缓存未命中，创建新实例: role=%s protocol=%s model=%s",
+                    role, getattr(profile, "protocol", "?"), getattr(profile, "model", "?"),
+                )
+            entry.users += 1
+        try:
+            if old_to_close is not None:
+                await self._close_provider(old_to_close)
+            yield entry.provider
+        finally:
+            async with self._provider_lock:
+                entry.users -= 1
+                close_retired = entry.retired and entry.users == 0
+            if close_retired:
+                await self._close_provider(entry.provider)
+
+    async def _close_provider(self, provider: LLMService) -> None:
+        """Close resources after their last request has released the provider."""
+        try:
+            close = getattr(provider, "aclose", None)
+            if callable(close):
+                await close()
+            else:
+                self._close_sync_clients(provider)
+                await self._close_async_clients(provider)
         except Exception as exc:
             logger.debug("关闭旧 Provider 时出现可忽略异常: %s", exc)
-        finally:
-            self._cached_provider = None
-            self._cached_key = None
 
     @staticmethod
     def _close_sync_clients(provider: LLMService) -> None:
@@ -195,11 +206,11 @@ class DynamicLLMService(LLMService):
             model = settings.default_model
 
         max_tokens = config.max_tokens
-        if max_tokens == _DEFAULT_CONFIG.max_tokens:
+        if not config.max_tokens_explicit and max_tokens == _DEFAULT_CONFIG.max_tokens:
             max_tokens = settings.default_max_tokens
 
         temperature = config.temperature
-        if temperature == _DEFAULT_CONFIG.temperature:
+        if not config.temperature_explicit and temperature == _DEFAULT_CONFIG.temperature:
             temperature = settings.default_temperature
 
         return GenerationConfig(
@@ -234,7 +245,12 @@ class DynamicLLMService(LLMService):
         return provider_label, generation_profile, model, metadata
 
     async def generate(self, prompt: Prompt, config: GenerationConfig) -> GenerationResult:
-        provider = await self._resolve_provider(config)
+        async with self._lease_provider(config) as provider:
+            return await self._generate_with_provider(provider, prompt, config)
+
+    async def _generate_with_provider(
+        self, provider: LLMService, prompt: Prompt, config: GenerationConfig,
+    ) -> GenerationResult:
         effective_config = self._merge_config(config, provider)
         trace = ensure_trace(operation="llm_generate", metadata={"entry": "DynamicLLMService.generate"})
         request_span_id = trace.new_span_id("llm-request")
@@ -296,7 +312,17 @@ class DynamicLLMService(LLMService):
         return result
 
     async def stream_generate(self, prompt: Prompt, config: GenerationConfig) -> AsyncIterator[str]:
-        provider = await self._resolve_provider(config)
+        async with self._lease_provider(config) as provider:
+            stream = self._stream_with_provider(provider, prompt, config)
+            try:
+                async for chunk in stream:
+                    yield chunk
+            finally:
+                await stream.aclose()
+
+    async def _stream_with_provider(
+        self, provider: LLMService, prompt: Prompt, config: GenerationConfig,
+    ) -> AsyncIterator[str]:
         effective_config = self._merge_config(config, provider)
         trace = ensure_trace(
             operation="llm_stream_generate",
@@ -329,8 +355,9 @@ class DynamicLLMService(LLMService):
         preview_parts: list[str] = []
         preview_chars = 0
         total_chars = 0
+        provider_stream = provider.stream_generate(prompt, effective_config)
         try:
-            async for chunk in provider.stream_generate(prompt, effective_config):
+            async for chunk in provider_stream:
                 if chunk:
                     response_parts.append(chunk)
                     total_chars += len(chunk)
@@ -370,7 +397,22 @@ class DynamicLLMService(LLMService):
                 latency_ms=int((time.perf_counter() - started) * 1000),
                 metadata={**request_metadata, "content_length": total_chars},
             )
+        finally:
+            close = getattr(provider_stream, "aclose", None)
+            if callable(close):
+                try:
+                    await close()
+                except Exception:
+                    logger.debug("关闭 Provider 输出流失败", exc_info=True)
 
     async def aclose(self) -> None:
-        """异步关闭缓存 Provider。"""
-        await self._close_cached_provider()
+        """Reject new work and defer active providers' cleanup until release."""
+        async with self._provider_lock:
+            self._closed = True
+            entries = list(self._providers.values())
+            self._providers.clear()
+            for entry in entries:
+                entry.retired = True
+            idle = [entry.provider for entry in entries if entry.users == 0]
+        for provider in idle:
+            await self._close_provider(provider)

@@ -40,9 +40,11 @@ class Settings:
         if not (0.0 <= self.default_temperature <= 2.0):
             raise ValueError("Temperature must be between 0.0 and 2.0")
 
+        self.default_max_tokens = int(self.default_max_tokens)
         if self.default_max_tokens <= 0:
             raise ValueError("Max tokens must be positive")
-        self.default_max_tokens = max(int(self.default_max_tokens), DEFAULT_MAX_OUTPUT_TOKENS)
+        # Keep the configured per-profile budget. The domain default is used
+        # only when no budget was supplied.
 
         if self.timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be positive")
