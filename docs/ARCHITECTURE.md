@@ -89,8 +89,8 @@
 
 | 模块 | 职责 |
 |------|------|
-| `ai/llm_client.py` | 方舟 SDK 封装 |
-| `ai/chromadb_vector_store.py` | ChromaDB 向量存储 |
+| `ai/llm_client.py` | 动态 LLM provider 包装，统一生成与流式调用 |
+| `ai/chromadb_vector_store.py` | FAISS 与 JSON 元数据存储，保留 ChromaDB 兼容命名 |
 | `ai/local_embedding_service.py` | 本地嵌入模型 |
 | `persistence/database/` | SQLite 仓储实现 |
 

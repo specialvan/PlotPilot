@@ -72,7 +72,7 @@ PlotPilot 内核由五个相互协作的子系统构成：
 
 引擎维护两条并行索引：
 
-- **章内容索引**：基于 FAISS / ChromaDB 的本地向量库，对所有已写章节做语义切片索引
+- **章内容索引**：默认使用本地 FAISS 与 JSON 元数据存储（保留 ChromaDB 兼容命名），对所有已写章节做语义切片索引
 - **三元组索引**：从正文中自动抽取的 `(主体, 关系, 客体)` 三元组，支持结构化与语义混合查询
 
 生成时，引擎通过当前场景语义自动召回相关历史内容，注入上下文，消除"模型失忆"问题。嵌入服务支持 OpenAI 兼容 API（轻量）和本地 `sentence-transformers` 模型（离线高性能）。
@@ -98,10 +98,10 @@ PlotPilot 内核由五个相互协作的子系统构成：
 ```
 
 关键工程特性：
-- **单一生产入口**：`scripts/start_daemon.py` 构造依赖并启动 `EngineDaemon`
+- **统一运行时入口**：API 宿主管理 `EngineDaemon`；`scripts/start_daemon.py` 提供独立构造入口，其持久化装配仍需完整启动验证
 - **可回退写作路径**：默认 `StoryPipeline` 写作，`PLOTPILOT_USE_STORY_PIPELINE=off/legacy` 可临时回退
 - **熔断保护**：连续失败超过阈值自动暂停，附带诊断信息
-- **单写者路由（Write Dispatch）**：所有 SQLite 写操作经由统一调度器串行执行，消除并发写冲突
+- **单写者路由（Write Dispatch）**：统一连接层的常规 SQLite 写入经跨进程队列串行提交；bypass、独立连接和恢复边界见[架构分析](docs/ARCHITECTURE_TRANSFERABILITY.md)
 - **SSE 实时推流**：生成进度、Token 消耗、当前阶段、错误信息全部通过 Server-Sent Events 实时推送到前端
 - **检查点快照**：阶段推进前自动存档，支持从任意检查点恢复
 
@@ -174,13 +174,13 @@ PlotPilot 内核（本仓库）
 | 层 | 技术 | 选型理由 |
 |----|------|----------|
 | 后端框架 | FastAPI + uvicorn | 原生异步 + 自动 OpenAPI 文档，SSE 支持开箱即用 |
-| 架构范式 | DDD 分层 + 独立 `engine/` 运行内核 | 领域逻辑、用例编排、生产写作管线与技术实现分离，生态扩展不污染内核 |
+| 架构范式 | 分层目录 + 独立 `engine/` 运行内核 | 按领域、用例、运行时与技术实现组织；实际跨层依赖见架构分析 |
 | AI 接入 | OpenAI 兼容协议 / Anthropic Claude / 火山方舟 Doubao | 统一接口抽象，模型切换不改业务代码 |
-| 向量存储 | ChromaDB（默认）/ FAISS | 本地部署，零外部依赖，冷启动快 |
+| 向量存储 | FAISS + JSON 元数据（保留 `chromadb` 配置名） | 本地持久化与向量检索 |
 | 嵌入模型 | OpenAI 兼容 API / 本地 `bge-small-zh-v1.5` | 在线轻量与离线高性能双模式 |
-| 主数据库 | SQLite + Write Dispatch 单写者路由 | 嵌入式零依赖，并发写冲突由调度层解决 |
+| 主数据库 | SQLite + Write Dispatch 写入调度 | 常规写入串行提交，兼容直写与故障恢复边界仍需治理 |
 | 前端 | Vue 3 + TypeScript + Vite + Naive UI + ECharts | 组件类型安全，知识图谱与 DAG 可视化由 ECharts 驱动 |
-| 桌面客户端 | Tauri（Rust） | 比 Electron 内存占用低 80%+，原生系统集成 |
+| 桌面客户端 | Tauri（Rust） | 使用系统 WebView，集成原生桌面能力 |
 
 ---
 

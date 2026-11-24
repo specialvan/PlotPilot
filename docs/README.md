@@ -5,12 +5,14 @@
 | 文档 | 说明 |
 |------|------|
 | [ARCHITECTURE.md](ARCHITECTURE.md) | 分层目录、模块职责与数据流概览 |
-| [ARCHITECTURE_TRANSFERABILITY.md](ARCHITECTURE_TRANSFERABILITY.md) | 面向写文工作台的架构能力、迁移边界、测试证据与风险清单 |
+| [ARCHITECTURE_TRANSFERABILITY.md](ARCHITECTURE_TRANSFERABILITY.md) | 架构能力、依赖实测、迁移许可、测试边界与风险清单 |
 | [BUILD_INSTALLER.md](BUILD_INSTALLER.md) | Windows / macOS 安装包的本地构建要点 |
 | [RELEASE_DESKTOP.md](RELEASE_DESKTOP.md) | 三平台签名发布、GitHub Actions 与发布后验证 |
 | [LOGGING.md](LOGGING.md) | 日志配置、查看与故障定位 |
 | [embedding_model_download_guide.md](embedding_model_download_guide.md) | 本地向量嵌入模型下载与配置 |
 
 仓库总览、启动方式与环境变量以根目录 [README.md](../README.md) 与 [.env.example](../.env.example) 为准。
+
+运行 `python scripts/analyze_architecture.py` 可复核架构分析中的静态依赖和热点文件；加 `--json` 可查看逐条引用。统计只描述源码事实，不自动判定层间违规。
 
 新增或移动文档后运行 `python scripts/check_docs.py` 检查仓库内 Markdown 链接。请勿提交 `.docx`、`.pptx`、`.xlsx`、内部路线图、未公开设定稿、客户资料或包含密钥的运行日志。
