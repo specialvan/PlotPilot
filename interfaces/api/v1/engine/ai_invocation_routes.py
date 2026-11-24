@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 import json
-from dataclasses import replace
 import asyncio
 import logging
 import time
@@ -38,12 +37,13 @@ from application.ai_invocation.prompt_variables import (
 )
 from application.ai_invocation.prompt_runtime import with_runtime_prompt_values
 from application.ai_invocation.services import AdoptionCommitService, AdoptionService, AttemptService, InvocationSessionService
+from application.ai_invocation.continuation import CommitInProgress
 from application.ai_invocation.spec_service import InvocationSpecNotFoundError, InvocationSpecService
 from application.ai_invocation.variable_literals import parse_variable_literal
 from application.ai_invocation.variable_hub import RUNTIME_ONLY_BINDING_SOURCES, VariableResolver, VariableWrite
 from domain.ai.value_objects.prompt import Prompt
 from infrastructure.persistence.database.connection import get_database
-from infrastructure.persistence.database.write_dispatch import sqlite_writes_bypass_queue
+from infrastructure.persistence.database.write_dispatch import run_on_sqlite_writer, run_on_sqlite_writer_async
 from infrastructure.persistence.database.sqlite_ai_invocation_repository import (
     SqliteAdoptionRepository,
     SqliteInvocationAttemptRepository,
@@ -220,7 +220,7 @@ def _save_invocation_result(repos, result) -> None:
     AI Invocation 是交互态：创建后前端会立即按 session_id 查询。
     这里必须避免普通 API 线程写入持久化队列后产生读后写不可见。
     """
-    with sqlite_writes_bypass_queue():
+    def _persist():
         repos["session"].save(result.session)
         if result.attempt is not None:
             repos["attempt"].save(result.attempt)
@@ -228,6 +228,7 @@ def _save_invocation_result(repos, result) -> None:
             repos["adoption"].save_decision(result.decision)
         if result.commit is not None:
             repos["adoption"].save_commit(result.commit)
+    run_on_sqlite_writer(_persist)
 
 
 def _publish_autopilot_session_state(session) -> None:
@@ -570,8 +571,9 @@ def _refresh_session_variables_from_hub(repos, session, *, render_prompt: bool =
         else:
             session.prompt_snapshot = CPMSPromptAssembler().compile(spec=spec, variable_plan=variable_plan)
     if persist:
-        with sqlite_writes_bypass_queue():
+        def _persist():
             repos["session"].save(session)
+        run_on_sqlite_writer(_persist)
     return session
 
 
@@ -664,8 +666,9 @@ async def _run_streaming_invocation_attempt(
             now = time.monotonic()
             if now - last_save >= 0.35:
                 attempt.content = "".join(parts)
-                with sqlite_writes_bypass_queue():
+                def _persist():
                     repos["attempt"].save(attempt)
+                await run_on_sqlite_writer_async(_persist)
                 last_save = now
 
         attempt.content = "".join(parts)
@@ -673,18 +676,20 @@ async def _run_streaming_invocation_attempt(
             raise ValueError("Content cannot be empty")
         attempt.status = InvocationAttemptStatus.SUCCEEDED
         session.status = InvocationSessionStatus.AWAITING_ACCEPTANCE
-        with sqlite_writes_bypass_queue():
+        def _persist():
             repos["attempt"].save(attempt)
             repos["session"].save(session)
+        await run_on_sqlite_writer_async(_persist)
         _publish_autopilot_session_state(session)
     except Exception as exc:
         attempt.content = "".join(parts)
         attempt.status = InvocationAttemptStatus.FAILED
         attempt.error = str(exc)
         session.status = InvocationSessionStatus.FAILED
-        with sqlite_writes_bypass_queue():
+        def _persist():
             repos["attempt"].save(attempt)
             repos["session"].save(session)
+        await run_on_sqlite_writer_async(_persist)
         _publish_autopilot_session_state(session)
         logger.exception(
             "streaming invocation failed: session=%s attempt=%s",
@@ -774,7 +779,9 @@ async def create_invocation(request: InvocationCreateRequest) -> dict[str, Any]:
     try:
         from application.ai_invocation.contracts import ensure_invocation_contract
 
-        ensure_invocation_contract(request.operation, request.node_key, get_database())
+        await run_on_sqlite_writer_async(
+            lambda: ensure_invocation_contract(request.operation, request.node_key, get_database())
+        )
     except ValueError:
         pass
     except RuntimeError as exc:
@@ -782,7 +789,9 @@ async def create_invocation(request: InvocationCreateRequest) -> dict[str, Any]:
     pre_materialized = []
     invocation_variables = request.variables
     if _request_variables_must_materialize(request.operation):
-        pre_materialized = _materialize_request_variables_before_invoke(repos, request)
+        pre_materialized = await run_on_sqlite_writer_async(
+            lambda: _materialize_request_variables_before_invoke(repos, request)
+        )
         written_aliases = {item["alias"] for item in pre_materialized}
         invocation_variables = {
             alias: value
@@ -798,7 +807,7 @@ async def create_invocation(request: InvocationCreateRequest) -> dict[str, Any]:
         session_service=InvocationSessionService(),
         attempt_service=AttemptService(llm_service),
         adoption_service=AdoptionService(),
-        commit_service=AdoptionCommitService(variable_hub_repository=repos["variable_hub"]),
+        commit_service=AdoptionCommitService(variable_hub_repository=repos["variable_hub"], adoption_repository=repos["adoption"]),
     )
     try:
         result = await gateway.invoke(
@@ -821,19 +830,19 @@ async def create_invocation(request: InvocationCreateRequest) -> dict[str, Any]:
 
     spec = repos["spec"].get(result.session.operation, result.session.node_key)
     if spec is not None:
-        materialize_input_variables(
+        await run_on_sqlite_writer_async(lambda: materialize_input_variables(
             variable_hub_repository=repos["variable_hub"],
             session=result.session,
             spec=spec,
             variable_plan=result.variable_plan,
             updated_by="create_invocation",
-        )
+        ))
     if pre_materialized:
         metadata = dict(result.session.metadata or {})
         metadata["pre_invocation_materialization"] = {"written": pre_materialized}
         result.session.metadata = metadata
 
-    _save_invocation_result(repos, result)
+    await asyncio.to_thread(_save_invocation_result, repos, result)
     _publish_autopilot_session_state(result.session)
 
     return {
@@ -934,8 +943,9 @@ async def save_prompt_draft(session_id: str, request: PromptDraftRequest) -> dic
         if session.variable_plan is not None and not session.variable_plan.ok
         else InvocationSessionStatus.AWAITING_PRE_CALL_REVIEW
     )
-    with sqlite_writes_bypass_queue():
+    def _persist():
         repos["session"].save(session)
+    await run_on_sqlite_writer_async(_persist)
     return {
         "session": _session_payload(repos, session),
         "next_action": _next_action(session.status),
@@ -982,7 +992,8 @@ async def update_invocation_variables(session_id: str, request: VariableUpdateRe
             raise HTTPException(status_code=400, detail=f"variable_key_not_bound:{alias}")
         if binding.source in RUNTIME_ONLY_BINDING_SOURCES or str(binding.variable_key).startswith("system."):
             raise HTTPException(status_code=400, detail=f"variable_not_persistable:{alias}")
-        stored = repos["variable_hub"].set_value(
+        stored = await asyncio.to_thread(
+            repos["variable_hub"].set_value,
             VariableWrite(
                 key=binding.variable_key,
                 value=value,
@@ -1031,8 +1042,9 @@ async def update_invocation_variables(session_id: str, request: VariableUpdateRe
     metadata = dict(session.metadata or {})
     metadata["last_variable_update"] = {"updated_by": request.updated_by, "written": written}
     session.metadata = metadata
-    with sqlite_writes_bypass_queue():
+    def _persist():
         repos["session"].save(session)
+    await run_on_sqlite_writer_async(_persist)
     _publish_autopilot_session_state(session)
     return {
         "session": _session_payload(repos, session),
@@ -1060,9 +1072,10 @@ async def accept_invocation(session_id: str, request: AdoptionAcceptRequest) -> 
         commit_variable_bindings=request.commit_variable_bindings,
         metadata=request.metadata,
     )
-    with sqlite_writes_bypass_queue():
+    def _persist():
         repos["adoption"].save_decision(decision)
         repos["session"].save(session)
+    await run_on_sqlite_writer_async(_persist)
     _publish_autopilot_session_state(session)
     return {
         "session": _session_payload(repos, session),
@@ -1084,8 +1097,9 @@ async def resume_invocation(session_id: str, request: ResumeInvocationRequest) -
     _refresh_session_variables_from_hub(repos, session, render_prompt=True, persist=False)
     if session.variable_plan is not None and not session.variable_plan.ok:
         session.status = InvocationSessionStatus.BLOCKED
-        with sqlite_writes_bypass_queue():
+        def _persist():
             repos["session"].save(session)
+        await run_on_sqlite_writer_async(_persist)
         return {
             "session": _session_payload(repos, session),
             "next_action": _next_action(session.status),
@@ -1099,9 +1113,10 @@ async def resume_invocation(session_id: str, request: ResumeInvocationRequest) -
     )
     session.attempts.append(attempt.id)
     session.status = InvocationSessionStatus.GENERATING
-    with sqlite_writes_bypass_queue():
+    def _persist():
         repos["attempt"].save(attempt)
         repos["session"].save(session)
+    await run_on_sqlite_writer_async(_persist)
     _publish_autopilot_session_state(session)
     asyncio.create_task(
         _run_streaming_invocation_attempt(
@@ -1135,8 +1150,9 @@ async def retry_invocation(session_id: str, request: ResumeInvocationRequest) ->
     _refresh_session_variables_from_hub(repos, session, render_prompt=True, persist=False)
     if session.variable_plan is not None and not session.variable_plan.ok:
         session.status = InvocationSessionStatus.BLOCKED
-        with sqlite_writes_bypass_queue():
+        def _persist():
             repos["session"].save(session)
+        await run_on_sqlite_writer_async(_persist)
         return {
             "session": _session_payload(repos, session),
             "next_action": _next_action(session.status),
@@ -1150,9 +1166,10 @@ async def retry_invocation(session_id: str, request: ResumeInvocationRequest) ->
     )
     session.attempts.append(attempt.id)
     session.status = InvocationSessionStatus.GENERATING
-    with sqlite_writes_bypass_queue():
+    def _persist():
         repos["attempt"].save(attempt)
         repos["session"].save(session)
+    await run_on_sqlite_writer_async(_persist)
     _publish_autopilot_session_state(session)
     asyncio.create_task(
         _run_streaming_invocation_attempt(
@@ -1178,9 +1195,10 @@ async def reject_invocation(session_id: str, request: AdoptionAcceptRequest) -> 
     if attempt is None or attempt.session_id != session_id:
         raise HTTPException(status_code=404, detail="invocation_attempt_not_found")
     decision = AdoptionService().reject(session=session, attempt=attempt, accepted_by=request.accepted_by)
-    with sqlite_writes_bypass_queue():
+    def _persist():
         repos["adoption"].save_decision(decision)
         repos["session"].save(session)
+    await run_on_sqlite_writer_async(_persist)
     _publish_autopilot_session_state(session)
     return {
         "session": _session_payload(repos, session),
@@ -1198,13 +1216,11 @@ async def create_commit(session_id: str, request: CommitCreateRequest) -> dict[s
     decision = repos["adoption"].get_decision(request.decision_id)
     if decision is None or decision.session_id != session_id:
         raise HTTPException(status_code=404, detail="adoption_decision_not_found")
-    commit = AdoptionCommitService(variable_hub_repository=repos["variable_hub"]).commit(
-        session=session,
-        decision=decision,
-    )
-    with sqlite_writes_bypass_queue():
-        repos["adoption"].save_commit(commit)
-        repos["session"].save(session)
+    service = AdoptionCommitService(variable_hub_repository=repos["variable_hub"], adoption_repository=repos["adoption"])
+    try:
+        commit = await asyncio.to_thread(service.commit, session=session, decision=decision)
+    except CommitInProgress as exc:
+        raise HTTPException(status_code=409, detail="adoption_commit_in_progress") from exc
     _publish_autopilot_session_state(session)
     return {
         "session": _session_payload(repos, session),

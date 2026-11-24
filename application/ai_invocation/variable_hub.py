@@ -525,12 +525,6 @@ class VariableResolver:
                 aliases.setdefault(public_alias, aliases[alias])
                 raw_aliases.setdefault(public_alias, raw_aliases.get(alias, aliases[alias]))
                 lineage.setdefault(public_alias, lineage.get(alias, "alias"))
-                if alias in resolved_from_hub:
-                    resolved_from_hub.add(public_alias)
-                    snapshot_values.setdefault(
-                        public_alias,
-                        snapshot_values.get(alias, raw_aliases.get(alias, aliases[alias])),
-                    )
 
         for alias, value in aliases.items():
             binding = binding_by_alias.get(alias)
@@ -609,8 +603,8 @@ class VariableResolver:
             "display_name": display_name,
             "value": value,
             "type": VariableResolver._infer_type(value),
-            "scope": binding.scope if binding and binding.scope else VariableResolver._infer_scope(variable_key),
-            "stage": binding.stage if binding and binding.stage else VariableResolver._infer_stage(variable_key),
+            "scope": binding.scope if binding and binding.scope not in ("", "runtime") else VariableResolver._infer_scope(variable_key),
+            "stage": binding.stage if binding and binding.stage not in ("", "runtime") else VariableResolver._infer_stage(variable_key),
             "source": "variable_hub" if lineage == "variable_hub" else (binding.source if binding and binding.source else lineage),
             "variable_key": variable_key,
             "required": bool(binding.required) if binding else False,
@@ -687,6 +681,8 @@ class VariableResolver:
             for item in snapshot_items
             if str(item.get("variable_key") or item.get("key") or "")
         }
+        for variable_key in tuple(seen_keys):
+            seen_keys.update(VARIABLE_KEY_ALIASES.get(variable_key, ()))
         try:
             current_values = self._repository.list_current_values(context_key)  # type: ignore[attr-defined]
         except Exception:
@@ -702,6 +698,7 @@ class VariableResolver:
             ):
                 continue
             seen_keys.add(variable_key)
+            seen_keys.update(VARIABLE_KEY_ALIASES.get(variable_key, ()))
             snapshot_items.append(
                 {
                     "key": variable_key,

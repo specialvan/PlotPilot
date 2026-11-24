@@ -57,7 +57,7 @@ def ensure_autopilot_stream_beat_contract(db=None) -> None:
         VariableBinding(alias="beat_content", variable_key="beat.prose.draft", required=True, source="autopilot_prose_generation", scope="beat", stage="writing", display_name="节拍正文"),
     ]
 
-    with sqlite_writes_bypass_queue():
+    with sqlite_writes_bypass_queue(reason='application.ai_invocation.contracts.autopilot_writing.ensure_autopilot_stream_beat_contract'):
         variable_repo = SqliteVariableHubRepository(db)
         variable_repo.set_bindings(input_binding_set_id, AUTOPILOT_STREAM_BEAT, input_bindings, direction="input")
         variable_repo.set_bindings(output_binding_set_id, AUTOPILOT_STREAM_BEAT, output_bindings, direction="output")
@@ -122,7 +122,7 @@ def ensure_autopilot_chapter_prose_contract(db=None) -> None:
         ),
     ]
 
-    with sqlite_writes_bypass_queue():
+    with sqlite_writes_bypass_queue(reason='application.ai_invocation.contracts.autopilot_writing.ensure_autopilot_chapter_prose_contract'):
         variable_repo = SqliteVariableHubRepository(db)
         variable_repo.set_bindings(
             input_binding_set_id,
@@ -201,7 +201,7 @@ def ensure_autopilot_audit_contract(db=None) -> None:
         ),
     ]
 
-    with sqlite_writes_bypass_queue():
+    with sqlite_writes_bypass_queue(reason='application.ai_invocation.contracts.autopilot_writing.ensure_autopilot_audit_contract'):
         variable_repo = SqliteVariableHubRepository(db)
         variable_repo.set_bindings(input_binding_set_id, ANTI_AI_CHAPTER_AUDIT, input_bindings, direction="input")
         variable_repo.set_bindings(output_binding_set_id, ANTI_AI_CHAPTER_AUDIT, output_bindings, direction="output")
@@ -278,7 +278,7 @@ def ensure_autopilot_aftermath_contract(db=None) -> None:
         ),
     ]
 
-    with sqlite_writes_bypass_queue():
+    with sqlite_writes_bypass_queue(reason='application.ai_invocation.contracts.autopilot_writing.ensure_autopilot_aftermath_contract'):
         variable_repo = SqliteVariableHubRepository(db)
         variable_repo.set_bindings(input_binding_set_id, CHAPTER_AFTERMATH, input_bindings, direction="input")
         variable_repo.set_bindings(output_binding_set_id, CHAPTER_AFTERMATH, output_bindings, direction="output")

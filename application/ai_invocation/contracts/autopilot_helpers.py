@@ -83,7 +83,7 @@ def _ensure_helper_contract(
     input_binding_set_id = f"{node_key}:input:autopilot-helper:v1"
     input_bindings = _bindings_for_aliases(_extract_aliases(node_key), optional_aliases=optional_aliases)
 
-    with sqlite_writes_bypass_queue():
+    with sqlite_writes_bypass_queue(reason='application.ai_invocation.contracts.autopilot_helpers._ensure_helper_contract'):
         variable_repo = SqliteVariableHubRepository(db)
         variable_repo.set_bindings(input_binding_set_id, node_key, input_bindings, direction="input")
         SqliteInvocationSpecRepository(db).upsert(

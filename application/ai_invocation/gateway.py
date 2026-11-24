@@ -1,6 +1,7 @@
 ﻿"""AIInvocationGateway：AI 调用唯一编排入口。"""
 from __future__ import annotations
 
+import asyncio
 from typing import Callable
 
 from domain.ai.services.llm_service import GenerationConfig, LLMService
@@ -108,7 +109,7 @@ class AIInvocationGateway:
                 accepted_by="system",
                 metadata={"auto_accept_policy": policy.value},
             )
-            commit = self._commit_service.commit(session=session, decision=decision)
+            commit = await asyncio.to_thread(self._commit_service.commit, session=session, decision=decision, attempt=attempt)
             return InvocationResult(
                 session=session,
                 attempt=attempt,
@@ -188,7 +189,7 @@ class AIInvocationGateway:
             accepted_by="system",
             metadata={"auto_accept_policy": session.policy.value},
         )
-        commit = self._commit_service.commit(session=session, decision=decision)
+        commit = await asyncio.to_thread(self._commit_service.commit, session=session, decision=decision, attempt=attempt)
         return InvocationResult(
             session=session,
             attempt=attempt,

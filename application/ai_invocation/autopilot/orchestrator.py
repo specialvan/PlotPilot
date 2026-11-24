@@ -1,6 +1,7 @@
 """Autopilot invocation orchestration."""
 from __future__ import annotations
 
+import asyncio
 from dataclasses import replace
 from typing import Any, Callable
 
@@ -206,7 +207,8 @@ class AutopilotInvocationOrchestrator:
             accepted_by="system",
             metadata={"auto_accept_policy": session.policy.value},
         )
-        commit = self._gateway._commit_service.commit(session=session, decision=decision)
+        commit = await asyncio.to_thread(self._gateway._commit_service.commit,
+                                        session=session, decision=decision, attempt=attempt)
         result = replace(prepared_result, attempt=attempt, decision=decision, commit=commit)
         self._save_result(result)
         self._publish(intent, result)
@@ -353,7 +355,8 @@ class AutopilotInvocationOrchestrator:
             accepted_by="system",
             metadata={"auto_accept_policy": session.policy.value},
         )
-        result = self._gateway._commit_service.commit(session=session, decision=decision)
+        result = await asyncio.to_thread(self._gateway._commit_service.commit,
+                                        session=session, decision=decision, attempt=attempt)
         prepared_result = replace(
             prepared_result,
             attempt=attempt,
@@ -385,7 +388,7 @@ class AutopilotInvocationOrchestrator:
             return
         from infrastructure.persistence.database.write_dispatch import sqlite_writes_bypass_queue
 
-        with sqlite_writes_bypass_queue():
+        with sqlite_writes_bypass_queue(reason='application.ai_invocation.autopilot.orchestrator._save_result'):
             self._session_repository.save(result.session)
             if result.attempt is not None and self._attempt_repository is not None:
                 self._attempt_repository.save(result.attempt)

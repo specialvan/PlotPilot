@@ -1,4 +1,5 @@
 import sqlite3
+from contextlib import contextmanager
 
 from application.ai_invocation.autopilot.continuations import register_autopilot_continuations
 from application.ai_invocation.continuation import ContinuationContext, execute_continuation
@@ -53,6 +54,11 @@ class _Db:
 
     def commit(self):
         self.conn.commit()
+
+    @contextmanager
+    def transaction(self):
+        with self.conn:
+            yield self.conn
 
     def fetch_one(self, sql, params=()):
         row = self.conn.execute(sql, params).fetchone()

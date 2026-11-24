@@ -325,6 +325,6 @@ def bible_locations_handler(context: ContinuationContext) -> Mapping[str, Any]:
 
 
 def register_bible_setup_continuations() -> None:
-    register_continuation_handler("bible_worldbuilding", bible_worldbuilding_handler)
-    register_continuation_handler("bible_characters", bible_characters_handler)
-    register_continuation_handler("bible_locations", bible_locations_handler)
+    register_continuation_handler("bible_worldbuilding", bible_worldbuilding_handler, retry_safe=True)
+    register_continuation_handler("bible_characters", bible_characters_handler, retry_safe=True)
+    register_continuation_handler("bible_locations", bible_locations_handler, retry_safe=True)

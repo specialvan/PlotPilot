@@ -4,11 +4,15 @@ from __future__ import annotations
 import logging
 import json
 import uuid
+import threading
+from contextlib import nullcontext
 from dataclasses import replace
 from typing import Any, Callable, Mapping
 
 from domain.ai.services.llm_service import GenerationConfig, LLMService
-from application.ai_invocation.continuation import ContinuationContext, execute_continuation
+from application.ai_invocation.continuation import (
+    ContinuationContext, execute_continuation, assert_continuation_retry_safe,
+)
 from application.ai_invocation.dtos import (
     AdoptionCommit,
     AdoptionCommitStatus,
@@ -212,14 +216,18 @@ class AdoptionService:
 
 
 class AdoptionCommitService:
-    """幂等提交采纳结果。
+    """Checkpoint commit steps through an injected durable repository.
 
-    当前只实现最小内容提交步骤；CPMS 版本、变量绑定、变量输出和 continuation
-    后续通过独立 step 扩展，不能再绕回 Gateway 或业务层硬编码。
+    In-memory instances are suitable for isolated tools/tests. Production
+    composition roots must provide adoption_repository for restart recovery.
+    Effect handlers still own their idempotency or compensation contract.
     """
 
-    def __init__(self, prompt_manager=None, variable_hub_repository: VariableHubRepository | None = None):
+    def __init__(self, prompt_manager=None, variable_hub_repository: VariableHubRepository | None = None,
+                 *, adoption_repository=None):
         self._commits_by_key: dict[str, AdoptionCommit] = {}
+        self._commit_lock = threading.RLock()
+        self._adoption_repository = adoption_repository
         self._prompt_manager = prompt_manager
         self._variable_hub_repository = variable_hub_repository
 
@@ -257,9 +265,12 @@ class AdoptionCommitService:
             raise ValueError(f"CPMS 节点不存在，无法写回提示词版本: {snapshot.node_key or session.node_key}")
 
         previous_version_id = node.active_version_id or ""
-        updated = mgr.update_node(
-            node.id,
-            system_prompt=snapshot.draft_prompt.system,
+        already_applied = (
+            getattr(node, "get_active_system", lambda: None)() == snapshot.draft_prompt.system
+            and getattr(node, "get_active_user_template", lambda: None)() == snapshot.draft_prompt.user
+        )
+        updated = node if already_applied else mgr.update_node(
+            node.id, system_prompt=snapshot.draft_prompt.system,
             user_template=snapshot.draft_prompt.user,
             change_summary=f"AI Invocation 采纳写回: {session.operation}",
         )
@@ -502,7 +513,8 @@ class AdoptionCommitService:
             "binding_set_id": snapshot.output_binding_set_id,
         }
 
-    def _commit_projection(self, *, session: InvocationSession, continuation_result: Mapping[str, Any] | None) -> dict:
+    def _commit_projection(self, *, session: InvocationSession, continuation_result: Mapping[str, Any] | None,
+                           commit_id: str = "") -> dict:
         projection = dict((continuation_result or {}).get("_projection") or {})
         if not projection:
             return {"skipped": True, "reason": "no_projection_plan"}
@@ -513,7 +525,7 @@ class AdoptionCommitService:
             from infrastructure.persistence.database.connection import get_database
             from application.ai_invocation.contracts.chapter_prose_generation import project_chapter_prose_to_chapters
 
-            return project_chapter_prose_to_chapters(get_database(), projection)
+            return project_chapter_prose_to_chapters(get_database(), projection, commit_id=commit_id)
         except Exception as exc:
             return {"blocked": True, "reason": "projection_failed", "error": str(exc)}
 
@@ -531,154 +543,147 @@ class AdoptionCommitService:
             return f"novel_id:{novel_id}"
         return "global"
 
-    def commit(self, *, session: InvocationSession, decision: AdoptionDecision) -> AdoptionCommit:
+    def commit(self, *, session: InvocationSession, decision: AdoptionDecision, attempt=None) -> AdoptionCommit:
         if decision.session_id != session.id:
-            raise ValueError("decision 不属于当前 invocation session")
+            raise ValueError("decision does not belong to invocation session")
+        repo = self._adoption_repository
         key = f"{session.id}:{decision.id}"
-        existing = self._commits_by_key.get(key)
-        if existing is not None:
-            return existing
-        if decision.decision != "accepted" or not decision.accept_content:
-            session.status = InvocationSessionStatus.CANCELLED
-            commit = AdoptionCommit(
-                id=str(uuid.uuid4()),
-                session_id=session.id,
-                decision_id=decision.id,
-                status=AdoptionCommitStatus.SUCCEEDED,
-                steps=[
-                    AdoptionCommitStep(
-                        name="commit_content_patch",
-                        status=AdoptionCommitStatus.SUCCEEDED,
-                        result={"skipped": True, "reason": "decision_not_accepted"},
-                    )
-                ],
-            )
-            self._commits_by_key[key] = commit
-            return commit
+        if repo is not None:
+            # Dependencies must exist before the durable claim (automatic commits
+            # may not have passed through a route's save-result path yet).
+            repo.prepare_commit(session=session, decision=decision, attempt=attempt)
+            record = repo.create_commit(session_id=session.id, decision_id=decision.id)
+            execution_lock = repo.execution_lock(record.id)
+        else:
+            record = None
+            execution_lock = nullcontext()
+        # Wait outside the SQLite writer: another executor may need that writer
+        # to complete the very commit whose lock we are waiting for.
+        with self._commit_lock, execution_lock:
+            commit = (repo.get_commit_for_decision(decision.id) if repo is not None
+                      else self._commits_by_key.get(key))
+            if commit is not None and commit.status == AdoptionCommitStatus.SUCCEEDED:
+                if repo is not None:
+                    # An old decision may be replayed after this session has
+                    # progressed. Return its receipt without overwriting that
+                    # newer session state.
+                    repo.restore_session(session)
+                return commit
+            if repo is not None:
+                if commit is not None and commit.status != AdoptionCommitStatus.PENDING:
+                    repo.restore_session(session)
+                else:
+                    repo.save_session(session)
+            if commit is None:
+                commit = AdoptionCommit(
+                    id=record.id if record is not None else str(uuid.uuid4()),
+                    session_id=session.id, decision_id=decision.id,
+                )
+            return self._execute_commit(session=session, decision=decision, commit=commit)
 
+    def _execute_commit(self, *, session, decision, commit) -> AdoptionCommit:
+        repo = self._adoption_repository
+        key = f"{session.id}:{decision.id}"
+        commit.status = AdoptionCommitStatus.RUNNING
+        commit.error = ""
         session.status = InvocationSessionStatus.COMMITTING
-        commit = AdoptionCommit(
-            id=str(uuid.uuid4()),
-            session_id=session.id,
-            decision_id=decision.id,
-            status=AdoptionCommitStatus.RUNNING,
-        )
-        try:
-            commit.steps.append(
-                AdoptionCommitStep(
-                    name="commit_content_patch",
-                    status=AdoptionCommitStatus.SUCCEEDED,
-                    result={
-                        "content_hash": stable_hash({"content": decision.accepted_content}),
-                        "content_length": len(decision.accepted_content),
-                    },
-                )
-            )
-            prompt_version_result = self._commit_prompt_version(session=session, decision=decision)
-            commit.steps.append(
-                AdoptionCommitStep(
-                    name="commit_prompt_version",
-                    status=AdoptionCommitStatus.SUCCEEDED,
-                    result=prompt_version_result,
-                )
-            )
-            if not prompt_version_result.get("skipped"):
-                commit.result = {**commit.result, "prompt_version": prompt_version_result}
+        if repo is not None:
+            repo.save_commit(commit)
+
+        def checkpoint(step):
+            commit.steps[:] = [item for item in commit.steps if item.name != step.name]
+            commit.steps.append(step)
+            if repo is not None:
+                repo.upsert_step(commit_id=commit.id, step_name=step.name,
+                                 status=step.status.value, result=step.result, error=step.error)
+
+        def step(name, operation, *, continuation=False):
+            previous = next((item for item in commit.steps if item.name == name), None)
+            if previous is not None and previous.status == AdoptionCommitStatus.SUCCEEDED:
+                return dict(previous.result)
+            if continuation and previous is not None:
+                assert_continuation_retry_safe(ContinuationContext(session, decision, commit.id))
+            checkpoint(AdoptionCommitStep(name=name, status=AdoptionCommitStatus.RUNNING))
             try:
-                continuation_result = execute_continuation(ContinuationContext(session=session, decision=decision))
+                result = dict((repo.run_write(operation) if repo is not None else operation()) or {})
             except Exception as exc:
-                commit.steps.append(
-                    AdoptionCommitStep(
-                        name="continuation_handler",
-                        status=AdoptionCommitStatus.FAILED,
-                        result={
-                            "error": str(exc),
-                            "accepted_content_preview": (decision.accepted_content or "")[:1200],
-                        },
-                        error=str(exc),
-                    )
-                )
+                checkpoint(AdoptionCommitStep(name=name, status=AdoptionCommitStatus.FAILED,
+                           result={"error": str(exc)}, error=str(exc)))
+                raise
+            if repo is not None:
+                repo.save_session(session)
+            checkpoint(AdoptionCommitStep(
+                name=name,
+                status=AdoptionCommitStatus.BLOCKED if result.get("blocked") else AdoptionCommitStatus.SUCCEEDED,
+                result=result,
+            ))
+            return result
+
+        def blocked(result, result_key, default_reason):
+            if not result.get("blocked"):
+                if not result.get("skipped"):
+                    commit.result = {**commit.result, result_key: result}
+                return False
+            commit.status = AdoptionCommitStatus.BLOCKED
+            commit.error = str(result.get("reason") or default_reason)
+            commit.result = {**commit.result, result_key: result, "accepted_content": decision.accepted_content}
+            session.status = InvocationSessionStatus.BLOCKED
+            return True
+
+        try:
+            if decision.decision != "accepted" or not decision.accept_content:
+                step("commit_content_patch", lambda: {"skipped": True, "reason": "decision_not_accepted"})
+                commit.status = AdoptionCommitStatus.SUCCEEDED
+                session.status = InvocationSessionStatus.CANCELLED
+                return commit
+            step("commit_content_patch", lambda: {
+                "content_hash": stable_hash({"content": decision.accepted_content}),
+                "content_length": len(decision.accepted_content),
+            })
+            prompt_result = step("commit_prompt_version", lambda: self._commit_prompt_version(
+                session=session, decision=decision))
+            if not prompt_result.get("skipped"):
+                commit.result = {**commit.result, "prompt_version": prompt_result}
+            try:
+                continuation_result = step("continuation_handler", lambda: execute_continuation(
+                    ContinuationContext(session, decision, commit.id)), continuation=True)
+            except Exception as exc:
                 commit.status = AdoptionCommitStatus.FAILED
                 commit.error = str(exc)
-                commit.result = {
-                    **commit.result,
-                    "accepted_content": decision.accepted_content,
-                    "continuation_error": str(exc),
-                }
+                commit.result = {**commit.result, "accepted_content": decision.accepted_content,
+                                 "continuation_error": str(exc)}
                 session.status = InvocationSessionStatus.BLOCKED
                 return commit
             if continuation_result:
-                commit.steps.append(
-                    AdoptionCommitStep(
-                        name="continuation_handler",
-                        status=AdoptionCommitStatus.SUCCEEDED,
-                        result=continuation_result,
-                    )
-                )
                 commit.result = {**commit.result, "continuation": continuation_result}
-            variable_output_result = self._commit_variable_outputs(
-                session=session,
-                decision=decision,
-                commit_id=commit.id,
-                output_payload=continuation_result,
-            )
-            output_step_status = (
-                AdoptionCommitStatus.BLOCKED
-                if variable_output_result.get("blocked")
-                else AdoptionCommitStatus.SUCCEEDED
-            )
-            commit.steps.append(
-                AdoptionCommitStep(
-                    name="commit_variable_outputs",
-                    status=output_step_status,
-                    result=variable_output_result,
-                )
-            )
-            if variable_output_result.get("blocked"):
-                commit.status = AdoptionCommitStatus.BLOCKED
-                commit.error = str(variable_output_result.get("reason") or "required_output_missing")
-                commit.result = {
-                    **commit.result,
-                    "accepted_content": decision.accepted_content,
-                    "variable_outputs": variable_output_result,
-                }
-                session.status = InvocationSessionStatus.BLOCKED
+            output_result = step("commit_variable_outputs", lambda: self._commit_variable_outputs(
+                session=session, decision=decision, commit_id=commit.id, output_payload=continuation_result))
+            if blocked(output_result, "variable_outputs", "required_output_missing"):
                 return commit
-            if not variable_output_result.get("skipped"):
-                commit.result = {**commit.result, "variable_outputs": variable_output_result}
-            projection_result = self._commit_projection(session=session, continuation_result=continuation_result)
-            projection_step_status = (
-                AdoptionCommitStatus.BLOCKED
-                if projection_result.get("blocked")
-                else AdoptionCommitStatus.SUCCEEDED
-            )
-            commit.steps.append(
-                AdoptionCommitStep(
-                    name="commit_projection",
-                    status=projection_step_status,
-                    result=projection_result,
-                )
-            )
-            if projection_result.get("blocked"):
-                commit.status = AdoptionCommitStatus.BLOCKED
-                commit.error = str(projection_result.get("reason") or "projection_failed")
-                commit.result = {
-                    **commit.result,
-                    "accepted_content": decision.accepted_content,
-                    "projection": projection_result,
-                }
-                session.status = InvocationSessionStatus.BLOCKED
+            projection_result = step("commit_projection", lambda: self._commit_projection(
+                session=session, continuation_result=continuation_result,
+                commit_id=commit.id if repo is not None else ""))
+            if blocked(projection_result, "projection", "projection_failed"):
                 return commit
-            if not projection_result.get("skipped"):
-                commit.result = {**commit.result, "projection": projection_result}
             commit.status = AdoptionCommitStatus.SUCCEEDED
             commit.result = {**commit.result, "accepted_content": decision.accepted_content}
             session.status = InvocationSessionStatus.COMPLETED
+            return commit
         except Exception as exc:
             commit.status = AdoptionCommitStatus.FAILED
             commit.error = str(exc)
             session.status = InvocationSessionStatus.FAILED
             raise
         finally:
+            # BaseException/process death can leave a running step. Recovery will
+            # replay only handlers that explicitly declare their effects safe.
             self._commits_by_key[key] = commit
-        return commit
+            if repo is not None:
+                # Persist session state before advertising a terminal commit.
+                # If this write fails, a retry can still resume the running
+                # record and reuse its already completed steps.
+                repo.save_session(session)
+                repo.save_commit(commit)
+                stored = repo.get_commit_for_decision(decision.id)
+                if stored is not None:
+                    commit.steps = stored.steps

@@ -150,7 +150,7 @@ def _resume_autopilot_stage(novel_id: str, stage: str, **fields: Any) -> None:
             set_parts.append(f"{key} = ?")
             params.append(value)
         params.append(novel_id)
-        with sqlite_writes_bypass_queue():
+        with sqlite_writes_bypass_queue(reason='application.ai_invocation.autopilot.continuations._resume_autopilot_stage'):
             db.execute(
                 f"UPDATE novels SET {', '.join(set_parts)} WHERE id = ?",
                 tuple(params),
@@ -186,6 +186,8 @@ def _write_chapter_draft(
     *,
     append: bool,
     status: str,
+    commit_id: str = "",
+    next_beat_index: int | None = None,
 ) -> dict[str, Any]:
     try:
         from application.paths import get_db_path
@@ -193,11 +195,19 @@ def _write_chapter_draft(
         from infrastructure.persistence.database.write_dispatch import sqlite_writes_bypass_queue
 
         db = get_database(get_db_path())
-        with sqlite_writes_bypass_queue():
-            row = db.fetch_one(
+        with sqlite_writes_bypass_queue(reason='application.ai_invocation.autopilot.continuations._write_chapter_draft'), db.transaction() as conn:
+            if commit_id:
+                receipt = conn.execute(
+                    "SELECT result_json FROM ai_adoption_commit_steps WHERE commit_id = ? AND step_name = 'continuation.chapter_draft' AND status = 'succeeded'",
+                    (commit_id,),
+                ).fetchone()
+                if receipt is not None:
+                    return {**json.loads(receipt["result_json"]), "replayed": True}
+            stored = conn.execute(
                 "SELECT id, title, outline, content, status FROM chapters WHERE novel_id = ? AND number = ?",
                 (novel_id, chapter_number),
-            )
+            ).fetchone()
+            row = dict(stored) if stored is not None else None
             prior = str((row or {}).get("content") or "").strip()
             addition = str(content or "").strip()
             prior_status = str((row or {}).get("status") or "") if row else ""
@@ -229,7 +239,7 @@ def _write_chapter_draft(
                 }
             word_count = len(merged)
             if duplicate_content and row is not None and (append or prior_status == status):
-                return {
+                result = {
                     "word_count": word_count,
                     "skipped": True,
                     "reason": "duplicate_content",
@@ -237,8 +247,10 @@ def _write_chapter_draft(
                     "completed_transition": False,
                     "status": prior_status,
                 }
+                _record_chapter_draft_receipt(conn, commit_id, result)
+                return result
             if row is None:
-                db.execute(
+                conn.execute(
                     """
                     INSERT INTO chapters (
                         id, novel_id, number, title, content, outline, status, word_count,
@@ -259,7 +271,7 @@ def _write_chapter_draft(
                 )
                 action = "inserted"
             else:
-                db.execute(
+                conn.execute(
                     """
                     UPDATE chapters
                     SET content = ?, status = ?, word_count = ?, updated_at = CURRENT_TIMESTAMP
@@ -268,15 +280,36 @@ def _write_chapter_draft(
                     (merged, status, word_count, novel_id, chapter_number),
                 )
                 action = "updated"
-            db.commit()
-            return {
+            completed_transition = status == "completed" and prior_status != "completed"
+            if completed_transition:
+                conn.execute(
+                    """UPDATE novels SET
+                       current_auto_chapters = COALESCE(current_auto_chapters, 0) + 1,
+                       current_chapter_in_act = COALESCE(current_chapter_in_act, 0) + 1
+                       WHERE id = ?""", (novel_id,),
+                )
+            if status == "completed":
+                conn.execute(
+                    """UPDATE novels SET autopilot_status = 'running', current_stage = 'auditing',
+                       current_beat_index = 0, beats_completed = 0, updated_at = CURRENT_TIMESTAMP
+                       WHERE id = ?""", (novel_id,),
+                )
+            elif next_beat_index is not None:
+                conn.execute(
+                    """UPDATE novels SET autopilot_status = 'running', current_stage = 'writing',
+                       current_beat_index = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?""",
+                    (next_beat_index, novel_id),
+                )
+            result = {
                 "word_count": word_count,
                 "skipped": False,
                 "action": action,
                 "duplicate_content": duplicate_content,
-                "completed_transition": status == "completed" and prior_status != "completed",
+                "completed_transition": completed_transition,
                 "status": status,
             }
+            _record_chapter_draft_receipt(conn, commit_id, result)
+            return result
     except Exception as exc:
         logger.warning(
             "autopilot continuation failed to write chapter draft: novel=%s chapter=%s error=%s",
@@ -284,7 +317,21 @@ def _write_chapter_draft(
             chapter_number,
             exc,
         )
-        return {"word_count": 0, "skipped": True, "reason": str(exc), "completed_transition": False}
+        raise
+
+
+def _record_chapter_draft_receipt(conn, commit_id: str, result: Mapping[str, Any]) -> None:
+    if not commit_id:
+        return
+    # Receipt, chapter, counters and progress share the caller's transaction.
+    receipt_key = f"{commit_id}:continuation.chapter_draft"
+    conn.execute(
+        """INSERT INTO ai_adoption_commit_steps
+           (id, commit_id, step_name, status, step_idempotency_key, result_json, started_at, finished_at)
+           VALUES (?, ?, 'continuation.chapter_draft', 'succeeded', ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+           ON CONFLICT(commit_id, step_name) DO NOTHING""",
+        (receipt_key, commit_id, receipt_key, json.dumps(dict(result))),
+    )
 
 
 def _append_chapter_draft(novel_id: str, chapter_number: int, content: str) -> int:
@@ -317,14 +364,7 @@ def _resume_after_full_chapter_accept(
             "beats_completed = 0",
             "updated_at = CURRENT_TIMESTAMP",
         ]
-        if completed_transition:
-            set_parts.extend(
-                [
-                    "current_auto_chapters = COALESCE(current_auto_chapters, 0) + 1",
-                    "current_chapter_in_act = COALESCE(current_chapter_in_act, 0) + 1",
-                ]
-            )
-        with sqlite_writes_bypass_queue():
+        with sqlite_writes_bypass_queue(reason='application.ai_invocation.autopilot.continuations._resume_after_full_chapter_accept'):
             db.execute(
                 f"UPDATE novels SET {', '.join(set_parts)} WHERE id = ?",
                 (novel_id,),
@@ -383,7 +423,7 @@ def register_autopilot_continuations() -> None:
             "outline_plan_mode": payload.get("mode") or "autopilot_outline_partition",
         }
 
-    register_continuation_handler("autopilot_outline_partition", _outline_partition)
+    register_continuation_handler("autopilot_outline_partition", _outline_partition, retry_safe=True)
 
     def _macro_plan(ctx: ContinuationContext) -> Mapping[str, Any]:
         payload = _load_json_value(
@@ -497,7 +537,12 @@ def register_autopilot_continuations() -> None:
                 content,
                 append=not is_full_chapter,
                 status="completed" if is_full_chapter else "draft",
+                commit_id=ctx.commit_id,
+                next_beat_index=None if is_full_chapter else beat_index + 1,
             )
+            if write_result.get("replayed"):
+                return {"content": content, "beat_content": content,
+                        "chapter_number": chapter_number, "beat_index": beat_index}
             total_words = int(write_result.get("word_count") or 0)
             if is_full_chapter:
                 _clear_invocation_state(
@@ -588,8 +633,8 @@ def register_autopilot_continuations() -> None:
             "chapter.foreshadow_updates": payload.get("foreshadow_updates", []) if isinstance(payload, dict) else [],
         }
 
-    register_continuation_handler("autopilot_prose_generation", _prose_generation)
-    register_continuation_handler("autopilot_macro_plan", _macro_plan)
-    register_continuation_handler("autopilot_act_plan", _act_plan)
-    register_continuation_handler("autopilot_audit", _audit)
-    register_continuation_handler("autopilot_after_chapter_extract", _aftermath)
+    register_continuation_handler("autopilot_prose_generation", _prose_generation, retry_safe=True)
+    register_continuation_handler("autopilot_macro_plan", _macro_plan, retry_safe=True)
+    register_continuation_handler("autopilot_act_plan", _act_plan, retry_safe=True)
+    register_continuation_handler("autopilot_audit", _audit, retry_safe=True)
+    register_continuation_handler("autopilot_after_chapter_extract", _aftermath, retry_safe=True)

@@ -1,23 +1,19 @@
-"""持久化队列 - 单一写入者模式（CQRS / Actor Model）
+"""SQLite 写入队列：宿主消费者串行执行经此通道提交的命令。
 
-核心设计：
-1. 守护进程不直接写 DB，而是将持久化命令推入队列
-2. API 进程启动专用线程消费队列，作为唯一的 DB 写入者
-3. 彻底消除 SQLite 多进程锁竞争
-
-架构优势：
-- 隔离性：守护进程崩溃不影响 API 响应
-- 一致性：所有写操作序列化，无锁竞争
-- 数据安全：队列中的命令在内存中排队，亚秒级落盘
+普通 SQL 使用内存队列，入队不等于提交，也不提供崩溃重放保证。
+本进程 callback 和已注册的跨进程请求可以等待结果；显式 bypass
+与独立数据库连接仍在这个调度边界之外。
 """
 import json
+from concurrent.futures import Future
 import logging
 import multiprocessing as mp
 import queue
 import sqlite3
 import threading
 import time
-from dataclasses import dataclass, asdict
+import uuid
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional
 
@@ -83,6 +79,7 @@ class PersistenceCommandType(Enum):
 
     # 批量命令
     BATCH = "batch"
+    LOCAL_CALL = "local_call"
 
 
 @dataclass
@@ -94,7 +91,10 @@ class PersistenceCommand:
     command_id: Optional[str] = None
 
     def to_dict(self) -> Dict:
-        return asdict(self)
+        # mp.Queue handles serialization. Recursive asdict would destroy domain
+        # DTO types and deepcopy the reply pipe used by acknowledged requests.
+        return {"command_type": self.command_type, "payload": self.payload,
+                "timestamp": self.timestamp, "command_id": self.command_id}
 
     @classmethod
     def from_dict(cls, data: Dict) -> "PersistenceCommand":
@@ -111,6 +111,53 @@ class PersistenceQueue:
         self._handlers: Dict[str, Callable] = {}
         self._stats = {"queued": 0, "processed": 0, "failed": 0}
         self._settings: PersistentQueueSettings = get_persistent_queue_settings()
+        self._local_calls: Dict[str, tuple[Callable, Future]] = {}
+        self._local_calls_lock = threading.Lock()
+        self._remote_writer = False
+        self._jobs: set[threading.Thread] = set()
+        self._closing_jobs = False
+
+    def call_on_writer(self, operation: Callable, *, timeout: float = 30.0):
+        """Run a local callback on the consumer and acknowledge its result.
+
+        Only the identifier crosses mp.Queue. The callback stays in the API
+        process; child processes must continue using serializable commands.
+        A callback is never automatically retried, since it may have effects.
+        """
+        if self._consumer_thread and threading.get_ident() == self._consumer_thread.ident:
+            return operation()
+        call_id = uuid.uuid4().hex
+        future = Future()
+        with self._local_calls_lock:
+            if not self.is_consumer_running() or self._stop_event.is_set():
+                raise RuntimeError("SQLite writer consumer is not running")
+            self._local_calls[call_id] = (operation, future)
+        if not self.push(PersistenceCommandType.LOCAL_CALL.value, {"call_id": call_id}):
+            with self._local_calls_lock:
+                self._local_calls.pop(call_id, None)
+            raise RuntimeError("SQLite writer call could not be enqueued")
+        try:
+            return future.result(timeout=timeout)
+        finally:
+            # A timed-out call that has not begun must not execute later.
+            if future.cancel():
+                with self._local_calls_lock:
+                    self._local_calls.pop(call_id, None)
+
+    def _execute_local_call(self, call_id: str) -> None:
+        with self._local_calls_lock:
+            pending = self._local_calls.pop(call_id, None)
+        if pending is None:
+            return
+        operation, future = pending
+        if not future.set_running_or_notify_cancel():
+            return
+        try:
+            result = operation()
+        except BaseException as exc:
+            future.set_exception(exc)
+        else:
+            future.set_result(result)
 
     def initialize(self) -> mp.Queue:
         """初始化队列（在主进程调用）"""
@@ -126,7 +173,44 @@ class PersistenceQueue:
     def inject_queue(self, queue: mp.Queue) -> None:
         """注入队列（守护进程启动时调用）"""
         self._queue = queue
+        self._remote_writer = True
         logger.info("持久化队列已注入")
+
+    @property
+    def uses_remote_writer(self) -> bool:
+        return self._remote_writer
+
+    def request_result(self, command_type: str, payload: Dict[str, Any], *, timeout: float = 60.0):
+        """Request a known serializable operation from the owning process."""
+        receiver, sender = mp.Pipe(duplex=False)
+        try:
+            if not self.push(command_type, {**payload, "reply": sender}):
+                raise RuntimeError("Writer request could not be enqueued")
+            if not receiver.poll(timeout):
+                raise TimeoutError("Writer response timed out; retry with the same idempotency key")
+            succeeded, result = receiver.recv()
+            if not succeeded:
+                raise RuntimeError(result)
+            return result
+        finally:
+            receiver.close()
+            sender.close()
+
+    def submit_job(self, operation: Callable[[], Any]) -> None:
+        """Run coordination outside the writer so it can await writer calls."""
+        def run():
+            try:
+                operation()
+            finally:
+                with self._local_calls_lock:
+                    self._jobs.discard(threading.current_thread())
+
+        with self._local_calls_lock:
+            if self._closing_jobs:
+                raise RuntimeError("SQLite writer is shutting down")
+            worker = threading.Thread(target=run, name="PersistenceCoordinator", daemon=True)
+            self._jobs.add(worker)
+            worker.start()
 
     def register_handler(self, command_type: str, handler: Callable) -> None:
         """注册命令处理器"""
@@ -174,6 +258,7 @@ class PersistenceQueue:
             return
 
         self._stop_event.clear()
+        self._closing_jobs = False
         self._consumer_thread = threading.Thread(
             target=self._consume_loop,
             name="PersistenceConsumer",
@@ -184,12 +269,19 @@ class PersistenceQueue:
 
     def stop_consumer(self) -> None:
         """停止消费者线程"""
-        from infrastructure.persistence.database.write_dispatch import clear_sqlite_writer_thread
-
-        self._stop_event.set()
+        deadline = time.monotonic() + self._settings.consumer_stop_timeout_seconds
+        with self._local_calls_lock:
+            self._closing_jobs = True
+            jobs = list(self._jobs)
+        for job in jobs:
+            job.join(timeout=max(0, deadline - time.monotonic()))
+        with self._local_calls_lock:
+            self._stop_event.set()
         if self._consumer_thread:
             self._consumer_thread.join(timeout=self._settings.consumer_stop_timeout_seconds)
-        clear_sqlite_writer_thread()
+        if self.is_consumer_running():
+            logger.warning("持久化消费者仍在完成当前操作，尚未停止")
+            return
         logger.info("持久化消费者线程已停止")
 
     def _consume_loop(self) -> None:
@@ -201,23 +293,32 @@ class PersistenceQueue:
         register_sqlite_writer_thread()
         logger.info("持久化消费者开始轮询...")
 
-        while not self._stop_event.is_set():
-            try:
+        try:
+            while not self._stop_event.is_set():
                 try:
-                    item = self._queue.get(
-                        block=True,
-                        timeout=self._settings.consumer_idle_sleep_seconds,
-                    )
-                except queue.Empty:
-                    continue
+                    try:
+                        item = self._queue.get(
+                            block=True,
+                            timeout=self._settings.consumer_idle_sleep_seconds,
+                        )
+                    except queue.Empty:
+                        continue
+                    self._process_command(item)
+                except Exception as e:
+                    logger.error(f"持久化消费者异常: {e}", exc_info=True)
+            self._drain_queue()
+        finally:
+            # Keep writer identity until this thread has actually stopped writing.
+            from infrastructure.persistence.database.write_dispatch import clear_sqlite_writer_thread
 
-                self._process_command(item)
-
-            except Exception as e:
-                logger.error(f"持久化消费者异常: {e}", exc_info=True)
-
-        # 处理剩余命令
-        self._drain_queue()
+            clear_sqlite_writer_thread()
+            with self._local_calls_lock:
+                self._stop_event.set()
+                pending = list(self._local_calls.values())
+                self._local_calls.clear()
+            for _, future in pending:
+                if future.set_running_or_notify_cancel():
+                    future.set_exception(RuntimeError("SQLite writer stopped before executing call"))
 
     def _process_command(self, item: Dict) -> None:
         """处理单个命令"""
@@ -244,6 +345,9 @@ class PersistenceQueue:
 
     def _process_single_command(self, command_type: str, payload: Dict) -> None:
         """处理单个命令，DB 被锁时按配置进行指数退避。"""
+        if command_type == PersistenceCommandType.LOCAL_CALL.value:
+            self._execute_local_call(payload["call_id"])
+            return
         handler = self._handlers.get(command_type)
         if not handler:
             logger.warning(f"未注册的命令类型: {command_type}")

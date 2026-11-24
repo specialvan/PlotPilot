@@ -147,7 +147,7 @@ class InvocationContractRegistry:
                 )
             )
 
-        with sqlite_writes_bypass_queue():
+        with sqlite_writes_bypass_queue(reason='application.ai_invocation.contracts.registry._ensure_chapter_generation_contract'):
             variable_repo = SqliteVariableHubRepository(self._db)
             variable_repo.set_bindings(binding_set_id, CHAPTER_GENERATION_MAIN, input_bindings, direction="input")
             SqliteInvocationSpecRepository(self._db).upsert(

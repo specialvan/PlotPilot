@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import uuid
 from dataclasses import dataclass
+from functools import wraps
 from typing import Any, Mapping
 
 from application.ai_invocation.dtos import (
@@ -34,6 +35,15 @@ from application.ai_invocation.variable_hub import (
 )
 from domain.ai.value_objects.prompt import Prompt
 from domain.ai.value_objects.token_usage import TokenUsage
+from infrastructure.persistence.database.adoption_lock import adoption_execution_lock
+from infrastructure.persistence.database.write_dispatch import run_on_sqlite_writer
+
+
+def _on_writer(method):
+    @wraps(method)
+    def dispatched(*args, **kwargs):
+        return run_on_sqlite_writer(lambda: method(*args, **kwargs))
+    return dispatched
 
 
 def _new_id(prefix: str) -> str:
@@ -622,20 +632,40 @@ class SqliteAdoptionRepository:
             metadata=_json_loads(row["metadata_json"], {}),
         )
 
+    def execution_lock(self, commit_id: str):
+        return adoption_execution_lock(self._db, commit_id)
+
+    def commit_service(self, variable_hub_repository):
+        from infrastructure.persistence.database.adoption_dispatch import DispatchedAdoptionCommitService
+        return DispatchedAdoptionCommitService(self, variable_hub_repository)
+
+    @staticmethod
+    def run_write(operation):
+        return run_on_sqlite_writer(operation)
+
+    @_on_writer
+    def prepare_commit(self, *, session, decision, attempt=None) -> None:
+        if self._db.fetch_one("SELECT id FROM ai_invocation_sessions WHERE id = ?", (session.id,)) is None:
+            SqliteInvocationSessionRepository(self._db).save(session)
+        if attempt is not None and self._db.fetch_one(
+            "SELECT id FROM ai_invocation_attempts WHERE id = ?", (attempt.id,)
+        ) is None:
+            SqliteInvocationAttemptRepository(self._db).save(attempt)
+        if self.get_decision(decision.id) is None:
+            self.save_decision(decision)
+
+    def restore_session(self, session) -> None:
+        saved = SqliteInvocationSessionRepository(self._db).get(session.id)
+        if saved is not None:
+            session.__dict__.update(saved.__dict__)
+
+    @_on_writer
+    def save_session(self, session) -> None:
+        SqliteInvocationSessionRepository(self._db).save(session)
+
+    @_on_writer
     def create_commit(self, *, session_id: str, decision_id: str) -> AdoptionCommitRecord:
         idempotency_key = f"{session_id}:{decision_id}"
-        existing = self._db.fetch_one(
-            "SELECT * FROM ai_adoption_commits WHERE idempotency_key = ?",
-            (idempotency_key,),
-        )
-        if existing is not None:
-            return AdoptionCommitRecord(
-                id=existing["id"],
-                session_id=existing["session_id"],
-                decision_id=existing["decision_id"],
-                status=existing["status"],
-                idempotency_key=existing["idempotency_key"],
-            )
         commit_id = _new_id("commit")
         with self._db.transaction() as conn:
             conn.execute(
@@ -643,17 +673,20 @@ class SqliteAdoptionRepository:
                 INSERT INTO ai_adoption_commits (
                     id, session_id, decision_id, status, idempotency_key
                 ) VALUES (?, ?, ?, 'pending', ?)
+                ON CONFLICT(idempotency_key) DO NOTHING
                 """,
                 (commit_id, session_id, decision_id, idempotency_key),
             )
-        return AdoptionCommitRecord(
-            id=commit_id,
-            session_id=session_id,
-            decision_id=decision_id,
-            status="pending",
-            idempotency_key=idempotency_key,
-        )
+            row = conn.execute(
+                "SELECT * FROM ai_adoption_commits WHERE idempotency_key = ?",
+                (idempotency_key,),
+            ).fetchone()
+            return AdoptionCommitRecord(
+                id=row["id"], session_id=row["session_id"], decision_id=row["decision_id"],
+                status=row["status"], idempotency_key=row["idempotency_key"],
+            )
 
+    @_on_writer
     def upsert_step(
         self,
         *,
@@ -690,6 +723,7 @@ class SqliteAdoptionRepository:
                 ),
             )
 
+    @_on_writer
     def save_commit(self, commit: AdoptionCommit) -> None:
         with self._db.transaction() as conn:
             conn.execute(
@@ -698,7 +732,7 @@ class SqliteAdoptionRepository:
                     id, session_id, decision_id, status, idempotency_key,
                     result_json, error, updated_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-                ON CONFLICT(id) DO UPDATE SET
+                ON CONFLICT(idempotency_key) DO UPDATE SET
                     status=excluded.status,
                     result_json=excluded.result_json,
                     error=excluded.error,
@@ -714,6 +748,11 @@ class SqliteAdoptionRepository:
                     commit.error,
                 ),
             )
+            row = conn.execute(
+                "SELECT id FROM ai_adoption_commits WHERE idempotency_key = ?",
+                (f"{commit.session_id}:{commit.decision_id}",),
+            ).fetchone()
+            commit.id = row["id"]
         for step in commit.steps:
             self.upsert_step(
                 commit_id=commit.id,
@@ -735,7 +774,7 @@ class SqliteAdoptionRepository:
             SELECT *
             FROM ai_adoption_commit_steps
             WHERE commit_id = ?
-            ORDER BY started_at ASC
+            ORDER BY rowid ASC
             """,
             (row["id"],),
         )
@@ -1040,9 +1079,8 @@ class SqliteVariableHubRepository:
             description=row["description"] or "",
         )
 
+    @_on_writer
     def set_value(self, value: VariableValue | VariableWrite) -> VariableValue | None:
-        from infrastructure.persistence.database.write_dispatch import sqlite_writes_bypass_queue
-
         if isinstance(value, VariableValue):
             write = VariableWrite(
                 key=value.key,
@@ -1054,6 +1092,19 @@ class SqliteVariableHubRepository:
             write = value
         scope_key = write.context_key or "global"
         scope_level = "novel" if scope_key != "global" else "global"
+        if write.source_commit_id:
+            prior = self._db.fetch_one(
+                """SELECT v.value_json, v.version_number
+                   FROM variable_values v JOIN variable_lineage l ON l.variable_value_id = v.id
+                   WHERE v.variable_key = ? AND v.scope_level = ? AND v.scope_key = ?
+                     AND l.source_commit_id = ? LIMIT 1""",
+                (write.key, scope_level, scope_key, write.source_commit_id),
+            )
+            if prior is not None:
+                return VariableValue(
+                    key=write.key, value=_json_loads(prior["value_json"], None), context_key=scope_key,
+                    source_ref=write.source_session_id, version_number=prior["version_number"],
+                )
         clean_value = sanitize_variable_value(write.key, write.value)
         value_json = _json_dumps(clean_value)
         value_hash = _json_dumps({"value": clean_value})
@@ -1069,7 +1120,7 @@ class SqliteVariableHubRepository:
         )
         version = int(existing["version_number"] or 0) + 1 if existing else 1
         value_id = _new_id("var_value")
-        with sqlite_writes_bypass_queue(), self._db.transaction() as conn:
+        with self._db.transaction() as conn:
             conn.execute(
                 """
                 INSERT INTO variable_definitions (

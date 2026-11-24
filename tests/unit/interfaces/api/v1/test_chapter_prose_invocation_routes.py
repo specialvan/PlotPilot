@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import time
+from contextlib import ExitStack
+
+import pytest
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -14,6 +17,21 @@ from infrastructure.persistence.database.sqlite_ai_invocation_repository import 
 from infrastructure.persistence.database.write_dispatch import sqlite_writes_bypass_queue
 from application.ai_invocation.variable_hub import VariableWrite
 from interfaces.api.v1.engine import ai_invocation_routes
+
+
+@pytest.fixture
+def client_factory():
+    # Keep streaming background tasks alive between HTTP requests.
+    with ExitStack() as stack:
+        yield lambda app: stack.enter_context(TestClient(app))
+
+
+@pytest.fixture(autouse=True)
+def isolate_prompt_singletons(monkeypatch):
+    # These tests install managers backed by temporary databases. Restore the
+    # previous globals before a later module can use a closed connection.
+    monkeypatch.setattr("infrastructure.ai.prompt_manager._manager_instance", None)
+    monkeypatch.setattr("infrastructure.ai.prompt_registry._registry_instance", None)
 
 
 class _StreamingLLM:
@@ -39,7 +57,7 @@ def _wait_for_status(client: TestClient, session_id: str, expected: str, timeout
     raise AssertionError(f"session {session_id} did not reach {expected}: {latest}")
 
 
-def test_chapter_prose_invocation_http_lifecycle_writes_variable_hub_and_chapters(tmp_path, monkeypatch):
+def test_chapter_prose_invocation_http_lifecycle_writes_variable_hub_and_chapters(tmp_path, monkeypatch, client_factory):
     db = DatabaseConnection(str(tmp_path / "plotpilot-test.db"))
 
     monkeypatch.setattr(ai_invocation_routes, "get_database", lambda db_path=None: db)
@@ -53,7 +71,7 @@ def test_chapter_prose_invocation_http_lifecycle_writes_variable_hub_and_chapter
     prompt_registry_module._registry_instance = prompt_registry_module.PromptRegistry(
         prompt_manager=prompt_manager_module._manager_instance
     )
-    with sqlite_writes_bypass_queue():
+    with sqlite_writes_bypass_queue(reason="test.chapter_prose_setup"):
         with db.transaction() as conn:
             conn.execute(
                 "INSERT INTO novels (id, title, slug, target_chapters) VALUES (?, ?, ?, ?)",
@@ -62,7 +80,7 @@ def test_chapter_prose_invocation_http_lifecycle_writes_variable_hub_and_chapter
 
     app = FastAPI()
     app.include_router(ai_invocation_routes.router)
-    client = TestClient(app)
+    client = client_factory(app)
 
     create_payload = {
         "operation": "chapter.generate.prose",
@@ -113,7 +131,7 @@ def test_chapter_prose_invocation_http_lifecycle_writes_variable_hub_and_chapter
     db.close_all(skip_checkpoint=True)
 
 
-def test_output_bindings_expose_only_user_defined_target_display_names(tmp_path, monkeypatch):
+def test_output_bindings_expose_only_user_defined_target_display_names(tmp_path, monkeypatch, client_factory):
     db = DatabaseConnection(str(tmp_path / "plotpilot-test-output-binding-names.db"))
 
     monkeypatch.setattr(ai_invocation_routes, "get_database", lambda db_path=None: db)
@@ -127,7 +145,7 @@ def test_output_bindings_expose_only_user_defined_target_display_names(tmp_path,
     prompt_registry_module._registry_instance = prompt_registry_module.PromptRegistry(
         prompt_manager=prompt_manager_module._manager_instance
     )
-    with sqlite_writes_bypass_queue():
+    with sqlite_writes_bypass_queue(reason="test.chapter_prose_setup"):
         with db.transaction() as conn:
             conn.execute(
                 "INSERT INTO novels (id, title, slug, target_chapters) VALUES (?, ?, ?, ?)",
@@ -150,7 +168,7 @@ def test_output_bindings_expose_only_user_defined_target_display_names(tmp_path,
 
     app = FastAPI()
     app.include_router(ai_invocation_routes.router)
-    client = TestClient(app)
+    client = client_factory(app)
 
     created = client.post(
         "/ai-invocations",
@@ -180,7 +198,7 @@ def test_output_bindings_expose_only_user_defined_target_display_names(tmp_path,
     db.close_all(skip_checkpoint=True)
 
 
-def test_bible_setup_invocation_materializes_inputs_and_get_refreshes_snapshot(tmp_path, monkeypatch):
+def test_bible_setup_invocation_materializes_inputs_and_get_refreshes_snapshot(tmp_path, monkeypatch, client_factory):
     db = DatabaseConnection(str(tmp_path / "plotpilot-test-bible-vars.db"))
 
     monkeypatch.setattr(ai_invocation_routes, "get_database", lambda db_path=None: db)
@@ -197,7 +215,7 @@ def test_bible_setup_invocation_materializes_inputs_and_get_refreshes_snapshot(t
 
     app = FastAPI()
     app.include_router(ai_invocation_routes.router)
-    client = TestClient(app)
+    client = client_factory(app)
     internal_hint = build_v1_structure_black_box_hint("standard", 500, 2000)
     author_premise = "旧设定：少年在海底城觉醒"
 
@@ -244,7 +262,7 @@ def test_bible_setup_invocation_materializes_inputs_and_get_refreshes_snapshot(t
     assert plan["aliases"]["premise"] == "新设定：变量中心改为天空城债务法则"
     assert plan["aliases"]["genre_reader_contract"]["reader_promise"] == "升级破局"
     assert any(
-        item["key"] == "premise" and item["value"] == "新设定：变量中心改为天空城债务法则"
+        item["variable_key"] == "novel.premise" and item["value"] == "新设定：变量中心改为天空城债务法则"
         for item in plan["snapshot_items"]
     )
     assert all(item["key"] != "fields_desc" for item in plan["snapshot_items"])
@@ -254,7 +272,7 @@ def test_bible_setup_invocation_materializes_inputs_and_get_refreshes_snapshot(t
     db.close_all(skip_checkpoint=True)
 
 
-def test_chapter_prose_prompt_draft_custom_variable_can_be_filled_and_resumed(tmp_path, monkeypatch):
+def test_chapter_prose_prompt_draft_custom_variable_can_be_filled_and_resumed(tmp_path, monkeypatch, client_factory):
     db = DatabaseConnection(str(tmp_path / "plotpilot-test-custom-var.db"))
 
     monkeypatch.setattr(ai_invocation_routes, "get_database", lambda db_path=None: db)
@@ -268,7 +286,7 @@ def test_chapter_prose_prompt_draft_custom_variable_can_be_filled_and_resumed(tm
     prompt_registry_module._registry_instance = prompt_registry_module.PromptRegistry(
         prompt_manager=prompt_manager_module._manager_instance
     )
-    with sqlite_writes_bypass_queue():
+    with sqlite_writes_bypass_queue(reason="test.chapter_prose_setup"):
         with db.transaction() as conn:
             conn.execute(
                 "INSERT INTO novels (id, title, slug, target_chapters) VALUES (?, ?, ?, ?)",
@@ -277,7 +295,7 @@ def test_chapter_prose_prompt_draft_custom_variable_can_be_filled_and_resumed(tm
 
     app = FastAPI()
     app.include_router(ai_invocation_routes.router)
-    client = TestClient(app)
+    client = client_factory(app)
 
     created = client.post(
         "/ai-invocations",
@@ -331,7 +349,7 @@ def test_chapter_prose_prompt_draft_custom_variable_can_be_filled_and_resumed(tm
     db.close_all(skip_checkpoint=True)
 
 
-def test_chapter_prose_prompt_draft_blank_templates_return_400(tmp_path, monkeypatch):
+def test_chapter_prose_prompt_draft_blank_templates_return_400(tmp_path, monkeypatch, client_factory):
     db = DatabaseConnection(str(tmp_path / "plotpilot-test-blank-prompt-draft.db"))
 
     monkeypatch.setattr(ai_invocation_routes, "get_database", lambda db_path=None: db)
@@ -345,7 +363,7 @@ def test_chapter_prose_prompt_draft_blank_templates_return_400(tmp_path, monkeyp
     prompt_registry_module._registry_instance = prompt_registry_module.PromptRegistry(
         prompt_manager=prompt_manager_module._manager_instance
     )
-    with sqlite_writes_bypass_queue():
+    with sqlite_writes_bypass_queue(reason="test.chapter_prose_setup"):
         with db.transaction() as conn:
             conn.execute(
                 "INSERT INTO novels (id, title, slug, target_chapters) VALUES (?, ?, ?, ?)",
@@ -354,7 +372,7 @@ def test_chapter_prose_prompt_draft_blank_templates_return_400(tmp_path, monkeyp
 
     app = FastAPI()
     app.include_router(ai_invocation_routes.router)
-    client = TestClient(app)
+    client = client_factory(app)
 
     created = client.post(
         "/ai-invocations",
@@ -390,7 +408,7 @@ def test_chapter_prose_prompt_draft_blank_templates_return_400(tmp_path, monkeyp
     db.close_all(skip_checkpoint=True)
 
 
-def test_chapter_prose_commit_can_promote_prompt_draft_to_cpms(tmp_path, monkeypatch):
+def test_chapter_prose_commit_can_promote_prompt_draft_to_cpms(tmp_path, monkeypatch, client_factory):
     db = DatabaseConnection(str(tmp_path / "plotpilot-test-prose-commit-prompt.db"))
 
     monkeypatch.setattr(ai_invocation_routes, "get_database", lambda db_path=None: db)
@@ -404,7 +422,7 @@ def test_chapter_prose_commit_can_promote_prompt_draft_to_cpms(tmp_path, monkeyp
     prompt_registry_module._registry_instance = prompt_registry_module.PromptRegistry(
         prompt_manager=prompt_manager_module._manager_instance
     )
-    with sqlite_writes_bypass_queue():
+    with sqlite_writes_bypass_queue(reason="test.chapter_prose_setup"):
         with db.transaction() as conn:
             conn.execute(
                 "INSERT INTO novels (id, title, slug, target_chapters) VALUES (?, ?, ?, ?)",
@@ -413,7 +431,7 @@ def test_chapter_prose_commit_can_promote_prompt_draft_to_cpms(tmp_path, monkeyp
 
     app = FastAPI()
     app.include_router(ai_invocation_routes.router)
-    client = TestClient(app)
+    client = client_factory(app)
 
     manager = prompt_manager_module._manager_instance
     before_node = manager.get_node("chapter-prose-generation", by_key=True)
@@ -499,7 +517,7 @@ def test_chapter_prose_commit_can_promote_prompt_draft_to_cpms(tmp_path, monkeyp
     db.close_all(skip_checkpoint=True)
 
 
-def test_chapter_prose_get_refresh_keeps_setup_snapshot_without_prompt_injection(tmp_path, monkeypatch):
+def test_chapter_prose_get_refresh_keeps_setup_snapshot_without_prompt_injection(tmp_path, monkeypatch, client_factory):
     db = DatabaseConnection(str(tmp_path / "plotpilot-test-prose-snapshot.db"))
 
     monkeypatch.setattr(ai_invocation_routes, "get_database", lambda db_path=None: db)
@@ -513,7 +531,7 @@ def test_chapter_prose_get_refresh_keeps_setup_snapshot_without_prompt_injection
     prompt_registry_module._registry_instance = prompt_registry_module.PromptRegistry(
         prompt_manager=prompt_manager_module._manager_instance
     )
-    with sqlite_writes_bypass_queue():
+    with sqlite_writes_bypass_queue(reason="test.chapter_prose_setup"):
         with db.transaction() as conn:
             conn.execute(
                 "INSERT INTO novels (id, title, slug, target_chapters) VALUES (?, ?, ?, ?)",
@@ -548,7 +566,7 @@ def test_chapter_prose_get_refresh_keeps_setup_snapshot_without_prompt_injection
 
     app = FastAPI()
     app.include_router(ai_invocation_routes.router)
-    client = TestClient(app)
+    client = client_factory(app)
 
     created = client.post(
         "/ai-invocations",

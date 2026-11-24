@@ -423,6 +423,8 @@ class AutopilotDaemonManager:
 
         persistence_queue = initialize_persistence_queue()
         register_persistence_handlers()
+        from infrastructure.persistence.database.adoption_dispatch import register_adoption_commit_handler
+        register_adoption_commit_handler(get_persistence_queue())
 
         queue = get_persistence_queue()
         if not queue.is_consumer_running():

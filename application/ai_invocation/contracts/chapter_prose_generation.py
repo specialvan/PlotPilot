@@ -1,6 +1,7 @@
 """Contracts and continuations for interactive chapter prose generation."""
 from __future__ import annotations
 
+import json
 import uuid
 from typing import Any
 
@@ -90,7 +91,7 @@ def ensure_chapter_prose_generation_contract(db) -> InvocationSpec:
             },
         },
     )
-    with sqlite_writes_bypass_queue():
+    with sqlite_writes_bypass_queue(reason='application.ai_invocation.contracts.chapter_prose_generation.ensure_chapter_prose_generation_contract'):
         variable_repo = SqliteVariableHubRepository(db)
         variable_repo.set_bindings(INPUT_BINDING_SET_ID, NODE_KEY, _input_bindings(), direction="input")
         variable_repo.set_bindings(OUTPUT_BINDING_SET_ID, NODE_KEY, _output_bindings(), direction="output")
@@ -105,7 +106,7 @@ def ensure_chapter_prose_generation_contract(db) -> InvocationSpec:
 
 
 def register_chapter_prose_generation_continuation() -> None:
-    register_continuation_handler(CONTINUATION_HANDLER_KEY, _chapter_generate_prose_commit)
+    register_continuation_handler(CONTINUATION_HANDLER_KEY, _chapter_generate_prose_commit, retry_safe=True)
 
 
 def _chapter_generate_prose_commit(context: ContinuationContext) -> dict[str, Any]:
@@ -134,7 +135,7 @@ def _chapter_generate_prose_commit(context: ContinuationContext) -> dict[str, An
     }
 
 
-def project_chapter_prose_to_chapters(db, projection: dict[str, Any]) -> dict[str, Any]:
+def project_chapter_prose_to_chapters(db, projection: dict[str, Any], *, commit_id: str = "") -> dict[str, Any]:
     novel_id = str(projection.get("novel_id") or "").strip()
     chapter_number = int(projection.get("chapter_number") or 0)
     content = str(projection.get("content") or "")
@@ -143,12 +144,20 @@ def project_chapter_prose_to_chapters(db, projection: dict[str, Any]) -> dict[st
     if not content.strip():
         return {"blocked": True, "reason": "empty_content_refuses_overwrite"}
 
-    existing = db.fetch_one(
-        "SELECT id, content FROM chapters WHERE novel_id = ? AND number = ?",
-        (novel_id, chapter_number),
-    )
     word_count = int(projection.get("word_count") or len(content.replace(" ", "")))
     with db.transaction() as conn:
+        if commit_id:
+            receipt = conn.execute(
+                """SELECT result_json FROM ai_adoption_commit_steps WHERE commit_id = ?
+                   AND step_name = 'projection.chapter_prose' AND status = 'succeeded'""",
+                (commit_id,),
+            ).fetchone()
+            if receipt is not None:
+                return json.loads(receipt["result_json"])
+        existing = conn.execute(
+            "SELECT id, content FROM chapters WHERE novel_id = ? AND number = ?",
+            (novel_id, chapter_number),
+        ).fetchone()
         if existing is None:
             chapter_id = f"chapter_{uuid.uuid4().hex}"
             conn.execute(
@@ -170,13 +179,23 @@ def project_chapter_prose_to_chapters(db, projection: dict[str, Any]) -> dict[st
                 (content, word_count, novel_id, chapter_number),
             )
             action = "updated"
-    return {
-        "skipped": False,
-        "projection_key": projection.get("projection_key") or "chapter_prose_to_chapters_v1",
-        "adapter": "chapters_table",
-        "action": action,
-        "chapter_id": chapter_id,
-        "novel_id": novel_id,
-        "chapter_number": chapter_number,
-        "word_count": word_count,
-    }
+        result = {
+            "skipped": False,
+            "projection_key": projection.get("projection_key") or "chapter_prose_to_chapters_v1",
+            "adapter": "chapters_table",
+            "action": action,
+            "chapter_id": chapter_id,
+            "novel_id": novel_id,
+            "chapter_number": chapter_number,
+            "word_count": word_count,
+        }
+        if commit_id:
+            receipt_key = f"{commit_id}:projection.chapter_prose"
+            conn.execute(
+                """INSERT INTO ai_adoption_commit_steps
+                   (id, commit_id, step_name, status, step_idempotency_key, result_json, started_at, finished_at)
+                   VALUES (?, ?, 'projection.chapter_prose', 'succeeded', ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                   ON CONFLICT(commit_id, step_name) DO NOTHING""",
+                (receipt_key, commit_id, receipt_key, json.dumps(result)),
+            )
+        return result

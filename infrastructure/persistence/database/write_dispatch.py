@@ -1,13 +1,14 @@
-"""单写者内核：标记持久化队列消费线程，并对「非 writer 线程」提供入队封装。
-
-SQLite 单机多写竞争者全部经 mp.Queue → 单一消费者线程顺序提交，从源头消除 database is locked。"""
+"""SQLite single-writer dispatch. Explicit startup/migration exceptions are audited."""
 from __future__ import annotations
 
 import contextlib
+from contextvars import ContextVar
+from collections import Counter
+import asyncio
 import logging
 import re
 import threading
-from typing import Any, List, Optional, Tuple, Union
+from typing import Any, Callable, List, Optional, Tuple, TypeVar, Union
 
 from infrastructure.persistence.database.write_environment import (
     SQLiteWriteEnvironmentSettings,
@@ -18,7 +19,10 @@ logger = logging.getLogger(__name__)
 _sqlite_writer_thread_ident: Optional[int] = None
 
 # interfaces.main startup：在持久化消费者线程就绪之前允许直连 SQLite（见 startup_sqlite_writes_bypass_queue）
-_startup_sqlite_bootstrap_depth = 0
+_sqlite_bypass_depth: ContextVar[int] = ContextVar("sqlite_bypass_depth", default=0)
+_bypass_usage: Counter[str] = Counter()
+_bypass_usage_lock = threading.Lock()
+T = TypeVar("T")
 
 
 def register_sqlite_writer_thread() -> None:
@@ -39,32 +43,61 @@ def is_sqlite_writer_thread() -> bool:
 
 
 @contextlib.contextmanager
-def sqlite_writes_bypass_queue():
-    """临时允许调用方线程直连 SQLite。
+def sqlite_writes_bypass_queue(*, reason: str):
+    """Allow direct writes in this context, recording the explicit exception.
 
-    仅用于启动早期迁移、测试初始化，或必须写后立刻读的轻量交互态。
-    注意：上下文内不要使用 ``await``。
+    asyncio tasks and to_thread inherit a copied context; bare threads and
+    run_in_executor do not. Prefer the writer queue for runtime operations.
     """
-    global _startup_sqlite_bootstrap_depth
-    _startup_sqlite_bootstrap_depth += 1
+    if not isinstance(reason, str) or not reason.strip():
+        raise ValueError("SQLite bypass requires a non-empty reason")
+    reason = reason.strip()
+    token = _sqlite_bypass_depth.set(_sqlite_bypass_depth.get() + 1)
+    with _bypass_usage_lock:
+        _bypass_usage[reason] += 1
+    logger.info("SQLite bypass entered: reason=%s depth=%d", reason, _sqlite_bypass_depth.get())
     try:
         yield
     finally:
-        _startup_sqlite_bootstrap_depth -= 1
+        _sqlite_bypass_depth.reset(token)
+        logger.debug("SQLite bypass exited: reason=%s", reason)
+
+
+def get_sqlite_bypass_usage() -> dict[str, int]:
+    """Return observed entries by reason; counters never grant write access."""
+    with _bypass_usage_lock:
+        return dict(_bypass_usage)
 
 
 @contextlib.contextmanager
 def startup_sqlite_writes_bypass_queue():
     """在持久化消费者线程启动前直连 SQLite 的兼容入口。"""
-    with sqlite_writes_bypass_queue():
+    with sqlite_writes_bypass_queue(reason="startup.bootstrap"):
         yield
 
 
 def allow_direct_sqlite_writes() -> bool:
     """脚本 / 迁移 / 启动早期 bypass / 个别单测可走直连写库；正式运行时默认走队列。"""
-    if _startup_sqlite_bootstrap_depth > 0:
+    if _sqlite_bypass_depth.get() > 0:
         return True
     return SQLiteWriteEnvironmentSettings.from_env().direct_writes
+
+
+def run_on_sqlite_writer(operation: Callable[[], T], *, timeout: float = 30.0) -> T:
+    """Wait for an API-process writer operation, including its committed reads.
+
+    Explicit migration/test direct-write settings remain supported. Callers in
+    an async endpoint must use the async wrapper to avoid blocking its loop.
+    """
+    if is_sqlite_writer_thread() or allow_direct_sqlite_writes():
+        return operation()
+    from application.engine.services.persistence_queue import get_persistence_queue
+
+    return get_persistence_queue().call_on_writer(operation, timeout=timeout)
+
+
+async def run_on_sqlite_writer_async(operation: Callable[[], T]) -> T:
+    return await asyncio.to_thread(run_on_sqlite_writer, operation)
 
 
 def strip_sql_comments(sql: str) -> str:

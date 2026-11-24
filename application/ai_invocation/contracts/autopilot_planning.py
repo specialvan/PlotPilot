@@ -89,7 +89,7 @@ def ensure_autopilot_outline_partition_contract(db=None) -> None:
         ),
     ]
 
-    with sqlite_writes_bypass_queue():
+    with sqlite_writes_bypass_queue(reason='application.ai_invocation.contracts.autopilot_planning.ensure_autopilot_outline_partition_contract'):
         variable_repo = SqliteVariableHubRepository(db)
         variable_repo.set_bindings(input_binding_set_id, OUTLINE_BEAT_PARTITION, input_bindings, direction="input")
         variable_repo.set_bindings(output_binding_set_id, OUTLINE_BEAT_PARTITION, output_bindings, direction="output")
@@ -197,7 +197,7 @@ def ensure_autopilot_macro_plan_contract(db=None) -> None:
         ),
     ]
 
-    with sqlite_writes_bypass_queue():
+    with sqlite_writes_bypass_queue(reason='application.ai_invocation.contracts.autopilot_planning.ensure_autopilot_macro_plan_contract'):
         variable_repo = SqliteVariableHubRepository(db)
         variable_repo.set_bindings(input_binding_set_id, PLANNING_QUICK_MACRO, input_bindings, direction="input")
         variable_repo.set_bindings(output_binding_set_id, PLANNING_QUICK_MACRO, output_bindings, direction="output")
@@ -259,7 +259,7 @@ def ensure_autopilot_act_plan_contract(db=None) -> None:
         ),
     ]
 
-    with sqlite_writes_bypass_queue():
+    with sqlite_writes_bypass_queue(reason='application.ai_invocation.contracts.autopilot_planning.ensure_autopilot_act_plan_contract'):
         variable_repo = SqliteVariableHubRepository(db)
         variable_repo.set_bindings(input_binding_set_id, PLANNING_ACT, input_bindings, direction="input")
         variable_repo.set_bindings(output_binding_set_id, PLANNING_ACT, output_bindings, direction="output")

@@ -60,4 +60,4 @@ def setup_main_plot_options_handler(context: ContinuationContext) -> Mapping[str
 
 
 def register_setup_main_plot_continuation() -> None:
-    register_continuation_handler("setup_main_plot_options", setup_main_plot_options_handler)
+    register_continuation_handler("setup_main_plot_options", setup_main_plot_options_handler, retry_safe=True)

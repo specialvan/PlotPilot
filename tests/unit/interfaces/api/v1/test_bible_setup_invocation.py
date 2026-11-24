@@ -44,6 +44,7 @@ async def test_create_bible_setup_invocation_returns_session_payload(monkeypatch
         _repositories=lambda: {
             "spec": SimpleNamespace(get=lambda *_args, **_kwargs: None),
             "variable_hub": SimpleNamespace(get_output_bindings=lambda *_args, **_kwargs: []),
+            "adoption": SimpleNamespace(),
         },
         _save_invocation_result=lambda *_args, **_kwargs: None,
         _attempt_payload=lambda attempt: attempt,

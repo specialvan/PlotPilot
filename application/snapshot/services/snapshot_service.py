@@ -224,7 +224,7 @@ class SnapshotService:
             sqlite_writes_bypass_queue,
         )
 
-        with sqlite_writes_bypass_queue():
+        with sqlite_writes_bypass_queue(reason='application.snapshot.services.snapshot_service.delete_snapshot'):
             with self.db.transaction() as conn:
                 row = conn.execute(
                     """

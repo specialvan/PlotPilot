@@ -523,7 +523,7 @@ async def _create_bible_setup_invocation(
         session_service=InvocationSessionService(),
         attempt_service=AttemptService(bible_generator.llm_service),
         adoption_service=AdoptionService(),
-        commit_service=AdoptionCommitService(variable_hub_repository=repos["variable_hub"]),
+        commit_service=AdoptionCommitService(variable_hub_repository=repos["variable_hub"], adoption_repository=repos["adoption"]),
     )
     result = await gateway.invoke(
         InvocationRequest(
@@ -548,7 +548,7 @@ async def _create_bible_setup_invocation(
         _session_payload,
     )
 
-    _save_invocation_result(repos, result)
+    await asyncio.to_thread(_save_invocation_result, repos, result)
     return {
         "session": _session_payload(repos, result.session),
         "attempt": _attempt_payload(result.attempt),

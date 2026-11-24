@@ -43,7 +43,7 @@ def _build_orchestrator(*, llm_service, publisher) -> AutopilotInvocationOrchest
         session_service=InvocationSessionService(),
         attempt_service=AttemptService(llm_service),
         adoption_service=AdoptionService(),
-        commit_service=AdoptionCommitService(variable_hub_repository=SqliteVariableHubRepository(db)),
+        commit_service=SqliteAdoptionRepository(db).commit_service(SqliteVariableHubRepository(db)),
         session_repository=SqliteInvocationSessionRepository(db),
         attempt_repository=SqliteInvocationAttemptRepository(db),
         adoption_repository=SqliteAdoptionRepository(db),

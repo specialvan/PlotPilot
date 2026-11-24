@@ -225,6 +225,8 @@ class BackendLifecycle:
 
             initialize_persistence_queue()
             register_persistence_handlers()
+            from infrastructure.persistence.database.adoption_dispatch import register_adoption_commit_handler
+            register_adoption_commit_handler(get_persistence_queue())
             get_persistence_queue().start_consumer()
             self._logger.info("Startup: persistence consumer is ready")
         except Exception as exc:

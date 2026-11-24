@@ -422,4 +422,4 @@ def setup_plot_outline_handler(context: ContinuationContext) -> Mapping[str, Any
 
 
 def register_setup_plot_outline_continuation() -> None:
-    register_continuation_handler("setup_plot_outline", setup_plot_outline_handler)
+    register_continuation_handler("setup_plot_outline", setup_plot_outline_handler, retry_safe=True)

@@ -183,7 +183,7 @@ def ensure_setup_main_plot_contract(db) -> InvocationSpec:
         change_summary="变量中心最终重构同步",
     )
     spec = setup_main_plot_spec()
-    with sqlite_writes_bypass_queue():
+    with sqlite_writes_bypass_queue(reason='application.blueprint.services.setup_main_plot_invocation.ensure_setup_main_plot_contract'):
         variable_repo = SqliteVariableHubRepository(db)
         existing_output_bindings = variable_repo.get_output_bindings(
             spec.output_binding_set_id,

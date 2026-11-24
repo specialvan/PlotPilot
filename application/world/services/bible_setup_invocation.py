@@ -343,7 +343,7 @@ def ensure_bible_setup_contract(db, *, operation: str, node_key: str) -> Invocat
     if spec.node_key != node_key:
         raise ValueError(f"unsupported bible setup node: operation={operation}, node_key={node_key}")
 
-    with sqlite_writes_bypass_queue():
+    with sqlite_writes_bypass_queue(reason='application.world.services.bible_setup_invocation.ensure_bible_setup_contract'):
         variable_repo = SqliteVariableHubRepository(db)
         variable_repo.set_bindings(
             spec.input_binding_set_id,
