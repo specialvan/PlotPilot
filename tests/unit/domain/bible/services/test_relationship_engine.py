@@ -1,3 +1,5 @@
+import gc
+
 import pytest
 import time
 from domain.bible.value_objects.character_id import CharacterId
@@ -621,10 +623,11 @@ class TestRelationshipEnginePerformance:
             engine.add_relationship(alice, char, Relationship(RelationType.FRIEND, 1, f"AC{i}"))
             engine.add_relationship(bob, char, Relationship(RelationType.FRIEND, 1, f"BC{i}"))
 
-        # Measure query time
-        start = time.time()
+        # Collect suite-wide garbage before timing the query's own work.
+        gc.collect()
+        start = time.perf_counter()
         common = engine.get_common_connections(alice, bob)
-        elapsed = time.time() - start
+        elapsed = time.perf_counter() - start
 
         assert len(common) == 5000
         assert elapsed < 0.1  # Should be reasonable
