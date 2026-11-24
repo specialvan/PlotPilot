@@ -5,6 +5,7 @@
 | 文档 | 说明 |
 |------|------|
 | [ARCHITECTURE.md](ARCHITECTURE.md) | 分层目录、模块职责与数据流概览 |
+| [ARCHITECTURE_TRANSFERABILITY.md](ARCHITECTURE_TRANSFERABILITY.md) | 面向写文工作台的架构能力、迁移边界、测试证据与风险清单 |
 | [BUILD_INSTALLER.md](BUILD_INSTALLER.md) | Windows / macOS 安装包的本地构建要点 |
 | [RELEASE_DESKTOP.md](RELEASE_DESKTOP.md) | 三平台签名发布、GitHub Actions 与发布后验证 |
 | [LOGGING.md](LOGGING.md) | 日志配置、查看与故障定位 |
