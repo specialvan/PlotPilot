@@ -319,14 +319,16 @@ class TestBuildPrompt:
         assert "HIGH" in prompt.system
         assert "CTX" in prompt.system
 
-    def test_build_prompt_includes_genre_profile_contract(self, workflow):
+    @pytest.mark.parametrize("beat_prompt", [None, "主角进入现场。"])
+    def test_build_prompt_includes_genre_profile_contract(self, workflow, beat_prompt):
         """类型画像应进入正文生成 system，避免分类只停留在前置向导。"""
-        prompt = workflow._build_prompt(
+        prompt = workflow.build_chapter_prompt(
             context="CTX",
             outline="OL",
             genre_opening_profile={"genre_major": "都市", "source_level": "secondary"},
             genre_reader_contract={"reader_promise": ["现实压迫快速建立"]},
             genre_rhythm_constraints={"payoff_interval": "短"},
+            beat_prompt=beat_prompt,
         )
 
         assert "类型开篇画像" in prompt.system

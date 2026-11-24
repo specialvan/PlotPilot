@@ -110,6 +110,29 @@ def test_bible_worldbuilding_package_exposes_split_fields():
     assert {"worldbuilding_full", "novel_setup", "core_rules", "geography", "society", "culture", "daily_life"}.isdisjoint(used)
 
 
+def test_worldbuilding_template_honors_single_dimension_schema():
+    from application.world.worldbuilding_schema import build_fields_desc_for_prompt
+
+    record = load_node_dir(NODES_DIR / "bible-worldbuilding")
+    variables = {item["name"]: "" for item in record["variables"]}
+    variables.update(
+        premise="只补全核心法则",
+        fields_desc=build_fields_desc_for_prompt(["core_rules"]),
+        genre_opening_profile={"current_dimension": "core_rules", "attempt": 2},
+        genre_reader_contract={},
+        genre_rhythm_constraints={},
+    )
+    rendered = get_template_engine().render(
+        system_template=record["system"], user_template=record["user_template"], variables=variables,
+    )
+    assert rendered.missing_variables == []
+    assert '"power_system"' in rendered.user
+    assert '"geography":' not in rendered.user
+    assert '"daily_life":' not in rendered.user
+    assert "current_dimension" in rendered.user
+    assert "{fields_desc}" not in rendered.user
+
+
 def test_prompt_gateway_fast_fails_when_registry_misses(monkeypatch):
     """Registry 未命中时，Gateway 必须阻断，不能读取本地 package 降级。"""
     gateway = PromptGateway(packages_root=NODES_DIR)

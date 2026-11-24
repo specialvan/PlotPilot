@@ -29,5 +29,17 @@ variables:
 - name: special_requirements
   desc: 特殊要求
   type: string
+- name: fields_desc
+  desc: 运行时提供的世界观维度与字段 JSON 模板
+  type: string
+- name: genre_opening_profile
+  desc: 类型画像或当前维度生成约束
+  type: object
+- name: genre_reader_contract
+  desc: 类型读者契约
+  type: object
+- name: genre_rhythm_constraints
+  desc: 类型节奏约束
+  type: object
 id: bible-worldbuilding
 sort_order: 27
